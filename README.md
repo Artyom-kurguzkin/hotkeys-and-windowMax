@@ -26,7 +26,6 @@ dist\WindowManager.exe                              # runs in the background, no
 | Alt+Q / Alt+M / Alt+N | Close / maximize or restore / minimize the active window |
 | Alt+T | Show or hide the title bar and tab strip of the active window |
 | Win+Alt (tap) | Show or hide the cropped tab strips on all windows |
-| Win+Alt+PageDown / PageUp | Crop 2 units more / less for the active app (saved) |
 | Alt + TrackPoint | Scroll in any direction. The cursor stays still |
 | Alt+H / J / K / L | Scroll left / down / up / right |
 | Alt+[ / Alt+] | Home / End. Add Shift to select |
@@ -45,7 +44,7 @@ All files live in `%LOCALAPPDATA%\WindowManager\`.
 | File | Contents |
 |---|---|
 | `wm.log` | Every decision: windows stripped or skipped (and why), crops, hotkey actions, Win32 failures. It rotates to `wm.log.old` past 5 MB |
-| `crop.json` | Per-app crop heights in DPI-independent units, written by Win+Alt+PageUp/PageDown. Overrides the defaults in `Crop.Defaults` |
+| `crop.json` | Optional, hand-edited, e.g. `{ "vivaldi": 36 }`: per-app crop heights in DPI-independent units, overriding `Crop.Defaults`. The program never writes it |
 | `state.json` | Windows the running instance has changed: original style and crop slot. It exists only while the program runs. If one is left behind, the next start undoes those changes |
 
 ## Troubleshooting
@@ -55,7 +54,7 @@ Start with the log, not the app.
 - **A window looks wrong:**
   1. Run `dist\WindowManager.exe --dump | Out-String -Width 400`. It lists every window with how it is classified (manageable, has caption, self-drawn, crop height) and changes nothing.
   2. Then search `wm.log` for that window's process name.
-- **The crop is too big or too small:** focus the app and press Win+Alt+PageUp/PageDown until it looks right. The value is saved per app.
+- **The crop is too big or too small:** the log line `crop <app> n=<px>` shows the height in use. Set a different value for that app in `crop.json` (in units: px × 96 / DPI), then restart the program.
 - **Keys or scrolling feel off:** run with `--verbose`. The log then also gets every raw key and every TrackPoint sample: `dx/dy`, the wheel delta sent, and `lag`, the time the sample waited in our queue.
   - Gaps between samples with `lag=0`: something upstream is stalling input, usually another program's low-level hook.
   - High `lag`: this program's thread was busy.
@@ -102,4 +101,4 @@ New work: `/opsx:propose <idea>`, then `/opsx:apply`, then `/opsx:archive`. Arch
 | `add-core-and-hotkeys` | Implemented; manual check of the binds pending |
 | `add-focus-and-trackpoint` | Implemented; TrackPoint scrolling verified; hover and Alt+Tab check pending |
 | `add-borderless-windows` | Implemented; manual Notepad/Snap check pending |
-| `add-chrome-crop` | Implemented; manual reveal and tuning check pending |
+| `add-chrome-crop` | Implemented; manual reveal check pending |

@@ -24,7 +24,7 @@ public enum Act
     None, AppsKey, Click, Esc, End, Home, ShiftEnd, ShiftHome, NewLineBelow, DesktopLeft, DesktopRight,
     WheelDown, WheelUp, WheelLeft, WheelRight, Quit,
     Close, ToggleMaximize, Minimize, ToggleChrome,
-    ToggleReveal, CropMore, CropLess,
+    ToggleReveal,
 }
 
 public readonly record struct KeyStroke(int Vk, bool Up);
@@ -61,10 +61,7 @@ public sealed class KeyEngine
         new(Mod.Alt, 'Q', Act.Close),
         new(Mod.Alt, 'M', Act.ToggleMaximize),
         new(Mod.Alt, 'N', Act.Minimize),
-        new(Mod.Alt, 'T', Act.ToggleChrome),
-        new(Mod.Win | Mod.Alt, Vk.PgDn, Act.CropMore),
-        new(Mod.Win | Mod.Alt, Vk.PgUp, Act.CropLess),
-    ];
+        new(Mod.Alt, 'T', Act.ToggleChrome),    ];
 
     bool tapArmed; // Win+Alt held and nothing else pressed since: releasing either fires ToggleReveal
     readonly HashSet<int> held = [];
@@ -321,7 +318,7 @@ public static class Chrome
 // Cropping the title bar / tab strip that apps draw inside their own client area.
 public static class Crop
 {
-    public const int DefaultDip = 32, StepDip = 2, SelfDrawnMaxGapDip = 16;
+    public const int DefaultDip = 32, SelfDrawnMaxGapDip = 16;
 
     // ponytail: hand-measured/estimated strip heights in DIP; Win+Alt+PgUp/PgDn tunes and persists per app.
     public static readonly IReadOnlyDictionary<string, int> Defaults = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
@@ -342,8 +339,6 @@ public static class Crop
         monitor.Bottom - window.Bottom is >= 0 and <= 2;
 
     public static int Pixels(int dip, uint dpi) => (int)Math.Round(dip * dpi / 96.0);
-
-    public static int Tune(int dip, int deltaDip) => Math.Max(0, dip + deltaDip);
 
     public static int DipFor(string process, IReadOnlyDictionary<string, int> overrides) =>
         overrides.TryGetValue(process, out var o) ? o : Defaults.TryGetValue(process, out var d) ? d : DefaultDip;
@@ -401,14 +396,6 @@ public sealed class CropTracker
         if (lastAttempt == (window, target)) return CropStep.None; // app refused this exact crop already
         lastAttempt = (window, target);
         return Remember(target, window, client, region);
-    }
-
-    // Re-crop from the current slot with a new height (tuning) without re-reading the window rect.
-    public CropStep Replan(int n)
-    {
-        if (Current() is not { } c) return CropStep.None;
-        var (target, region) = Crop.Plan(c.Slot, c.SlotClient, n);
-        return Remember(target, c.Slot, c.SlotClient, region);
     }
 
     // Stop cropping; returns the slot to move the window back to (null if it wasn't cropped).

@@ -20,7 +20,7 @@ Strip heights measured with `PrintWindow`, in pixels at 144 DPI: Edge tab strip 
 - All geometry and state decisions are pure and unit-tested.
 
 **Non-Goals:**
-- Detecting the bar's height automatically. Per-app values plus a live tuning hotkey are used instead.
+- Detecting the bar height automatically. Per-app default values are used, overridable only by hand-editing `crop.json`.
 - Restoring a window by mouse-dragging its edges while it is cropped. The clip removes the invisible resize border, and window control is done with hotkeys anyway.
 
 ## Decisions
@@ -41,7 +41,7 @@ Strip heights measured with `PrintWindow`, in pixels at 144 DPI: Edge tab strip 
 - **Crop height** = `round(dip * dpi / 96)`.
   - Defaults are a code table of DIP values: msedge/chrome/vivaldi 40, explorer 41, Slack 37, olk 50, Code 35, Obsidian 30, Discord 22, WindowsTerminal 40, Notepad 48. The fallback for other apps is 32.
   - Values saved in `crop.json` override the defaults.
-  - Tuning uses ±2 DIP steps with a floor of 0 (`Crop.Tune`).
+  - Removed at the user's request: a Win+Alt+PageUp/PageDown tuning hotkey that wrote `crop.json`. A stray key press could have changed a good setting, so heights now change only by deliberate edit.
 - **Detect the Win+Alt tap in `KeyEngine`.** A tap is armed when Win and Alt are both held and nothing else is. Any other key, including a third modifier, disarms it. The first release of Win or Alt fires `ToggleReveal` with `MaskFirst`, and the other modifier is marked dirty so its release is masked too.
 - **Cover vs crop.** Self-drawn windows skip the change 3 taskbar cover. Chromium already leaves 1–2 px at the bottom for auto-hide taskbar reveal, and running both adjustments would make them fight.
 - **Handle sideways resizes (found in use).** A snapped or floating Vivaldi was resized by dragging its width. Each step reported our cropped top (-60) with the height clamped back to the max track size (1226). The tracker treated each step as a new slot and cropped again, to -120. That left a 44 px gap at the bottom and hid 60 px of content. Now, a rect whose top equals the applied top keeps the current slot's top and bottom and takes only the new left and right.
@@ -53,5 +53,5 @@ Strip heights measured with `PrintWindow`, in pixels at 144 DPI: Edge tab strip 
 ## Risks / Trade-offs
 
 - [Windows' restore position is stored as our cropped rect] → `CropTracker`'s history recognizes it. The worst case is one extra crop step, which is visible in the log.
-- [The default heights are estimates for apps that weren't measured] → The tuning hotkey and the per-app log line (`crop <app> n=<px>`) make them easy to correct.
+- [The default heights are estimates for apps that weren't measured] → The per-app log line (`crop <app> n=<px>`) shows the value in use. Correct it in `Crop.Defaults`, or locally in `crop.json`.
 - [`SWP_NOSENDCHANGING` skips the app's sizing logic, so some app could render incorrectly] → The log shows each crop. Alt+T or the reveal undoes it per window.

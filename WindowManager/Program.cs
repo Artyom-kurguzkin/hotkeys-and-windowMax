@@ -37,7 +37,7 @@ static class Program
     static bool AltHeld => keys.Mods.HasFlag(Mod.Alt);
 
     // Window changes run off the keyboard hook callback (Windows drops hooks that take too long).
-    const uint WM_APP_TOGGLE_CHROME = 0x8001, WM_APP_TOGGLE_REVEAL = 0x8002, WM_APP_TUNE_CROP = 0x8003;
+    const uint WM_APP_TOGGLE_CHROME = 0x8001, WM_APP_TOGGLE_REVEAL = 0x8002;
     static readonly Dictionary<IntPtr, CropTracker> crops = [];  // self-drawn title bar windows
     static readonly Dictionary<string, int> cropOverrides = new(StringComparer.OrdinalIgnoreCase); // tuned DIP per process
     static readonly Dictionary<IntPtr, string> names = [];
@@ -161,9 +161,7 @@ static class Program
                     case WM_TIMER: OnTimer((UIntPtr)(ulong)wParam); break;
                     case WM_INPUT: OnRawInput(lParam); break;
                     case WM_APP_TOGGLE_CHROME: ToggleChrome(GetForegroundWindow()); break;
-                    case WM_APP_TOGGLE_REVEAL: ToggleReveal(); break;
-                    case WM_APP_TUNE_CROP: TuneCrop(GetForegroundWindow(), (int)wParam); break;
-                }
+                    case WM_APP_TOGGLE_REVEAL: ToggleReveal(); break;                }
             }
             catch (Exception e) { Log.Info($"wndproc error msg=0x{msg:X}: {e}"); }
             return DefWindowProc(hWnd, msg, wParam, lParam); // WM_CLOSE → DestroyWindow; WM_INPUT cleanup
@@ -218,9 +216,6 @@ static class Program
                 break;
             case Act.ToggleReveal:
                 PostMessage(msgWnd, WM_APP_TOGGLE_REVEAL, IntPtr.Zero, IntPtr.Zero);
-                break;
-            case Act.CropMore or Act.CropLess:
-                PostMessage(msgWnd, WM_APP_TUNE_CROP, act == Act.CropMore ? Crop.StepDip : -Crop.StepDip, IntPtr.Zero);
                 break;
             case Act.Close or Act.ToggleMaximize or Act.Minimize:
                 // Posted, like clicking the caption button; a hung app can't block the hook.
@@ -455,19 +450,7 @@ static class Program
         }
     }
 
-    static void TuneCrop(IntPtr hwnd, int deltaDip)
-    {
-        var proc = ProcessName(hwnd);
-        var dip = Crop.Tune(Crop.DipFor(proc, cropOverrides), deltaDip);
-        cropOverrides[proc] = dip;
-        SaveCropOverrides();
-        Log.Info($"crop height {proc} = {dip}dip");
-        if (revealed) return;
-        foreach (var (h, tracker) in crops)
-            if (!userShown.Contains(h) && ProcessName(h) == proc && GetWindowRect(h, out var window))
-                ApplyStep(h, tracker.Replan(CropPixels(h)), window);
-    }
-
+    // Hand-edited only (no hotkey writes it), so a stray key press can never change a good value.
     static string CropFile => Path.Combine(Log.DefaultDir, "crop.json");
 
     static void LoadCropOverrides()
@@ -480,12 +463,6 @@ static class Program
             Log.Info($"crop overrides: {string.Join(", ", cropOverrides.Select(kv => $"{kv.Key}={kv.Value}"))}");
         }
         catch (Exception e) when (e is IOException or JsonException) { Log.Info($"crop.json unreadable, using defaults: {e.Message}"); }
-    }
-
-    static void SaveCropOverrides()
-    {
-        try { File.WriteAllText(CropFile, JsonSerializer.Serialize(cropOverrides, new JsonSerializerOptions { WriteIndented = true })); }
-        catch (IOException e) { Log.Info($"crop.json not saved: {e.Message}"); }
     }
 
     // ---- shared ----

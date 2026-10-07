@@ -6,18 +6,18 @@
 
 ## 2. Logic
 
-- [x] 2.1 Add `Crop.IsSelfDrawn`, `Crop.Plan`, `Crop.Pixels`, `Crop.Tune` and the default height table; add unit tests for the detection, crop, clip, height and tuning scenarios
+- [x] 2.1 Add `Crop.IsSelfDrawn`, `Crop.Plan`, `Crop.Pixels` and the default height table; add unit tests for the detection, crop, clip and height scenarios
 - [x] 2.2 Add the `CropTracker` state machine (apply, own-move, history region-only, refused, uncrop); add unit tests for each crop scenario
-- [x] 2.3 Add Win+Alt tap detection, Win+Alt+PageUp/PageDown bindings, and allow `ApplicationFrameWindow` in `Chrome.IsManageable`; add unit tests for the reveal and UWP scenarios
+- [x] 2.3 Add Win+Alt tap detection and allow `ApplicationFrameWindow` in `Chrome.IsManageable`; add unit tests for the reveal and UWP scenarios
 
 ## 3. Win32
 
 - [x] 3.1 Add `Frames.SetRegion` and the `SWP_NOSENDCHANGING` move; add a Win32 test that crops a window the test creates and checks its window rect and `GetWindowRgnBox`
-- [x] 3.2 Wire classification, crop on location change, global and per-window reveal, tuning with crop.json persistence, and uncrop on quit in Program.cs, logging every crop and uncrop; verify through the log with a fresh Edge window
+- [x] 3.2 Wire classification, crop on location change, global and per-window reveal, crop.json overrides, and uncrop on quit in Program.cs, logging every crop and uncrop; verify through the log with a fresh Edge window
 
 ## 4. Manual checks
 
-- [ ] 4.1 With Edge, Explorer and Slack: no tab strip or top bar, nothing visible on a monitor above, Win+Alt reveals and hides without opening Start, Alt+T works per window, and the crop tuning hotkeys adjust and persist
+- [ ] 4.1 With Edge, Explorer and Slack: no tab strip or top bar, nothing visible on a monitor above, Win+Alt reveals and hides without opening Start, Alt+T works per window
 
 ## Workflow follow-up
 

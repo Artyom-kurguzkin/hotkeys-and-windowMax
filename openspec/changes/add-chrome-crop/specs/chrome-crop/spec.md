@@ -69,20 +69,16 @@ The system SHALL use a crop height per process name, in DPI-independent units, s
 - **WHEN** a self-drawn-bar app has no configured height
 - **THEN** the default height is used
 
-### Requirement: Tune crop height live
-The system SHALL increase the active app's crop height by 2 units on Win+Alt+PageDown and decrease it by 2 units on Win+Alt+PageUp, never below 0. It SHALL re-crop that app's windows immediately and persist the value across restarts.
+### Requirement: Crop heights change only by deliberate edit
+The system SHALL read per-app crop heights from the built-in defaults, overridden by a hand-edited `crop.json`. No hotkey or runtime action SHALL change or write crop heights, so a stray key press can't break a good setting.
 
-#### Scenario: Crop more
-- **WHEN** the user presses Win+Alt+PageDown over a cropped app
-- **THEN** that app's crop height grows by 2 units and its windows are re-cropped
+#### Scenario: Hand-edited value overrides default
+- **WHEN** crop.json sets a height for an app
+- **THEN** that height is used instead of the default
 
-#### Scenario: Crop never negative
-- **WHEN** the crop height is 0 and the user presses Win+Alt+PageUp
-- **THEN** the crop height stays 0
-
-#### Scenario: Tuned value persists
-- **WHEN** the program restarts after a crop height was tuned
-- **THEN** the tuned value is used
+#### Scenario: No hotkey changes crop height
+- **WHEN** the user presses any key combination
+- **THEN** no crop height is changed and crop.json is not written
 
 ### Requirement: Reveal hidden bars
 The system SHALL toggle a global reveal on a tap of Win+Alt: both keys pressed, then released, with no other key in between. While revealed, cropped windows SHALL show their full title bars in their assigned areas. The tap SHALL NOT open the Start menu or a menu bar.

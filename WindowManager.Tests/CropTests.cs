@@ -119,21 +119,11 @@ public class ChromeCropTests
     }
 
     [Fact]
-    public void Tuned_value_persists() => Assert.Equal(44, Crop.DipFor("msedge", new Dictionary<string, int> { ["msedge"] = 44 }));
+    public void Hand_edited_value_overrides_default() => Assert.Equal(44, Crop.DipFor("msedge", new Dictionary<string, int> { ["msedge"] = 44 }));
 
     [Fact]
-    public void Crop_more() => Assert.Equal(42, Crop.Tune(40, Crop.StepDip));
-
-    [Fact]
-    public void Crop_never_negative() => Assert.Equal(0, Crop.Tune(0, -Crop.StepDip));
-
-    [Fact]
-    public void Retune_recrops_from_the_same_slot()
-    {
-        var t = new CropTracker();
-        t.OnLocation(MaxWindow, MaxClient, 60);
-        Assert.Equal(MaxWindow with { Top = -73 }, t.Replan(63).Target);
-    }
+    public void No_hotkey_changes_crop_height() // the only Win chord is the reveal tap, which isn't a binding
+        => Assert.DoesNotContain(KeyEngine.Bindings, b => b.Mods.HasFlag(Mod.Win));
 
     [Fact]
     public void Quit_uncrops()
@@ -209,15 +199,12 @@ public class RevealTapTests
         Assert.Equal(Decision.Pass, e.Feed(Vk.LAlt, false, false));
     }
 
-    [Theory]
-    [InlineData(Vk.PgDn, Act.CropMore)]
-    [InlineData(Vk.PgUp, Act.CropLess)]
-    public void WinAltPage_tunes_crop(int key, Act act)
+    [Fact]
+    public void WinAltPage_passes_through()
     {
         e.Feed(Vk.LWin, true, false);
         e.Feed(Vk.LAlt, true, false);
-        Assert.Equal(new Decision(true, act), e.Feed(key, true, false));
-        Assert.True(e.Feed(Vk.LWin, false, false).MaskFirst); // no Start menu afterwards
+        Assert.Equal(Decision.Pass, e.Feed(Vk.PgDn, true, false));
     }
 }
 
