@@ -73,6 +73,30 @@ public static class Frames
             Log.Win32($"SetWindowPos(unclamped) 0x{hwnd:X}");
     }
 
+    // The Windows 11 system backdrop (Mica etc.) is painted over the whole window rect and ignores the window
+    // region, so a cropped window's hidden strip shows as a #202020 band on a monitor above (measured on VS Code:
+    // 63 grey rows with backdrop type 2, 0 with DWMSBT_NONE). Cropped windows get no backdrop; restore afterwards.
+    public static uint? GetBackdrop(IntPtr hwnd) =>
+        DwmGetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, out var v, sizeof(uint)) == 0 ? v : null;
+
+    public static void SetBackdrop(IntPtr hwnd, uint type)
+    {
+        var hr = DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref type, sizeof(uint));
+        if (hr != 0) Log.Info($"DwmSetWindowAttribute(backdrop={type}) 0x{hwnd:X} hr=0x{hr:X8}");
+    }
+
+    // DWM also draws the frame (#2B2B2B in dark mode) outside the region: with the backdrop off, a 9px line was
+    // left at the top of each cropped window (measured; 0 after disabling). Off while cropped, default afterwards.
+    public static void SetFrameRendering(IntPtr hwnd, bool on)
+    {
+        var policy = on ? DWMNCRP_USEWINDOWSTYLE : DWMNCRP_DISABLED;
+        var hr = DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_POLICY, ref policy, sizeof(uint));
+        if (hr != 0) Log.Info($"DwmSetWindowAttribute(ncrendering={policy}) 0x{hwnd:X} hr=0x{hr:X8}");
+    }
+
+    public static bool IsFrameRendered(IntPtr hwnd) =>
+        DwmGetWindowAttribute(hwnd, DWMWA_NCRENDERING_ENABLED, out var v, sizeof(uint)) == 0 && v != 0;
+
     // Region in window coordinates; null removes it. The system owns the region once SetWindowRgn succeeds.
     public static void SetRegion(IntPtr hwnd, Rect? region)
     {

@@ -32,6 +32,10 @@ The system SHALL stretch each window with a self-drawn title bar upward by its c
 - **WHEN** Windows moves the window back to a rect that the system had already produced by cropping
 - **THEN** only the clip is refreshed and the window is not extended again
 
+#### Scenario: Bar above the monitor edge is not cut again
+- **WHEN** a maximized window's content starts above its monitor's top edge, so part of its bar is already off-screen
+- **THEN** only the on-screen part of the bar is cropped, and the content row where the page starts lands exactly on the monitor's top edge
+
 #### Scenario: Sideways resize keeps the vertical slot
 - **WHEN** a cropped window is resized sideways and reports a rect that still has the cropped top edge, possibly with its height clamped
 - **THEN** only the slot's width is updated, and the window is re-cropped to the slot's full height without being moved up again
@@ -57,6 +61,14 @@ The system SHALL clip the cropped strip so that it is invisible even where it ex
 #### Scenario: Clip covers only content
 - **WHEN** a crop is applied
 - **THEN** the visible part of the window is exactly its content area below the crop line
+
+#### Scenario: Nothing drawn on a monitor above
+- **WHEN** a cropped window's stretched strip lies on another monitor
+- **THEN** no pixel of that strip is drawn there, including the system backdrop and the window frame, which ignore the clip
+
+#### Scenario: Backdrop and frame restored on uncrop
+- **WHEN** a cropped window is uncropped by reveal, Alt+T, app fullscreen, quit or recovery
+- **THEN** its original system backdrop and default frame rendering are restored
 
 ### Requirement: Crop height per app
 The system SHALL use a crop height per process name, in DPI-independent units, scaled by the window's DPI. Apps not listed SHALL use a default height.

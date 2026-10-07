@@ -14,11 +14,13 @@ public class InstanceTests
     public void State_round_trips_through_the_file()
     {
         var path = Path.Combine(Directory.CreateTempSubdirectory().FullName, "state.json");
-        State.Entry[] entries = [new(0x1234, 0x14CF0000, [0, -60, 1920, 1200]), new(0x5678, 0x14CF0000, null)];
+        State.Entry[] entries = [new(0x1234, 0x14CF0000, [0, -60, 1920, 1200], 2), new(0x5678, 0x14CF0000, null)];
         State.Save(path, entries);
         var back = State.Load(path);
         Assert.Equal(2, back.Length);
         Assert.Equal(entries[0].Slot, back[0].Slot);
+        Assert.Equal(2u, back[0].Backdrop);
+        Assert.Null(back[1].Backdrop);
         Assert.Null(back[1].Slot);
         Assert.Equal(0x14CF0000u, back[1].OriginalStyle);
     }

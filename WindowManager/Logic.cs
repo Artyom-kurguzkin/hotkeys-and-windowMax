@@ -323,7 +323,8 @@ public static class Crop
     // ponytail: hand-measured/estimated strip heights in DIP; Win+Alt+PgUp/PgDn tunes and persists per app.
     public static readonly IReadOnlyDictionary<string, int> Defaults = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
     {
-        ["msedge"] = 40, ["chrome"] = 40, ["vivaldi"] = 40, ["explorer"] = 41, ["Slack"] = 37, ["olk"] = 50,
+        ["msedge"] = 40, ["chrome"] = 40,
+        ["vivaldi"] = 30, // measured: title row only (tabs on the side, no address bar) ["explorer"] = 41, ["Slack"] = 37, ["olk"] = 50,
         ["Code"] = 35, ["Obsidian"] = 30, ["Discord"] = 22, ["WindowsTerminal"] = 40, ["Notepad"] = 48,
     };
 
@@ -339,6 +340,11 @@ public static class Crop
         monitor.Bottom - window.Bottom is >= 0 and <= 2;
 
     public static int Pixels(int dip, uint dpi) => (int)Math.Round(dip * dpi / 96.0);
+
+    // Maximized Chromium windows start their content above the monitor edge (measured: Vivaldi 8px). That part of
+    // the bar is already off-screen; cropping the full height on top of it cut 8px into the page/side tabs.
+    public static int VisibleBar(int n, Rect slotClient, int monitorTop) =>
+        Math.Max(0, n - Math.Max(0, monitorTop - slotClient.Top));
 
     public static int DipFor(string process, IReadOnlyDictionary<string, int> overrides) =>
         overrides.TryGetValue(process, out var o) ? o : Defaults.TryGetValue(process, out var d) ? d : DefaultDip;
@@ -370,7 +376,9 @@ public sealed class CropTracker
     public Rect? Applied { get; private set; } // the rect we last put the window at (or recognised as ours)
     public Rect? Slot => Current()?.Slot;      // where Windows had put it before we cropped (null = not cropped)
 
-    public CropStep OnLocation(Rect window, Rect client, int n)
+    // n = the bar height measured from the content top. monitorTop: the part of the bar already above the monitor
+    // edge is hidden anyway and must not be cut again.
+    public CropStep OnLocation(Rect window, Rect client, int n, int monitorTop = int.MinValue)
     {
         if (Applied == window) return CropStep.None; // our own move echoing back
 
@@ -392,7 +400,7 @@ public sealed class CropTracker
             client = client with { Top = c.SlotClient.Top, Bottom = c.SlotClient.Bottom };
         }
 
-        var (target, region) = Crop.Plan(window, client, n);
+        var (target, region) = Crop.Plan(window, client, Crop.VisibleBar(n, client, monitorTop));
         if (lastAttempt == (window, target)) return CropStep.None; // app refused this exact crop already
         lastAttempt = (window, target);
         return Remember(target, window, client, region);

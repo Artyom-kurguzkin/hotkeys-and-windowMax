@@ -39,6 +39,7 @@ static class Program
     // Window changes run off the keyboard hook callback (Windows drops hooks that take too long).
     const uint WM_APP_TOGGLE_CHROME = 0x8001, WM_APP_TOGGLE_REVEAL = 0x8002;
     static readonly Dictionary<IntPtr, CropTracker> crops = [];  // self-drawn title bar windows
+    static readonly Dictionary<IntPtr, uint> backdrops = [];     // original backdrop of windows we turned it off for
     static readonly Dictionary<string, int> cropOverrides = new(StringComparer.OrdinalIgnoreCase); // tuned DIP per process
     static readonly Dictionary<IntPtr, string> names = [];
     static bool revealed;
@@ -147,7 +148,15 @@ static class Program
 
     static void SaveState() => State.Save(State.DefaultPath,
         managed.Select(kv => new State.Entry(kv.Key, kv.Value,
-            crops.TryGetValue(kv.Key, out var t) && t.Slot is { } s ? State.ToArray(s) : null)));
+            crops.TryGetValue(kv.Key, out var t) && t.Slot is { } s ? State.ToArray(s) : null,
+            backdrops.TryGetValue(kv.Key, out var b) ? b : null)));
+
+    // Undo the DWM changes a crop needs (see ApplyStep).
+    static void BackdropRestore(IntPtr hwnd)
+    {
+        if (backdrops.Remove(hwnd, out var original)) Frames.SetBackdrop(hwnd, original);
+        Frames.SetFrameRendering(hwnd, true);
+    }
 
     static IntPtr CreateMessageWindow()
     {
@@ -353,7 +362,7 @@ static class Program
             {
                 case EVENT_OBJECT_SHOW: Manage(hwnd); break;
                 case EVENT_OBJECT_DESTROY:
-                    userShown.Remove(hwnd); coverAttempts.Remove(hwnd); crops.Remove(hwnd); names.Remove(hwnd);
+                    userShown.Remove(hwnd); coverAttempts.Remove(hwnd); crops.Remove(hwnd); names.Remove(hwnd); backdrops.Remove(hwnd);
                     if (managed.Remove(hwnd)) SaveState();
                     break;
                 case EVENT_OBJECT_LOCATIONCHANGE when !managed.ContainsKey(hwnd):
@@ -401,19 +410,27 @@ static class Program
             if (tracker.Applied is not null)
             {
                 tracker.Uncrop(); // the app moved itself to fullscreen: just drop the clip, don't move it
-                SaveState();
                 Frames.SetRegion(hwnd, null);
+                BackdropRestore(hwnd);
+                SaveState();
                 Log.Info($"uncrop {Describe(hwnd)}: app went fullscreen");
             }
             return;
         }
-        ApplyStep(hwnd, tracker.OnLocation(window, Frames.ClientOnScreen(hwnd), CropPixels(hwnd)), window);
+        ApplyStep(hwnd, tracker.OnLocation(window, Frames.ClientOnScreen(hwnd), CropPixels(hwnd), Frames.MonitorRect(hwnd).Top), window);
     }
 
     static void ApplyStep(IntPtr hwnd, CropStep step, Rect from)
     {
         // ponytail: rewrites state.json on every crop (a few per window move); debounce if it ever shows up in profiles
-        if (step.Kind != CropKind.None) SaveState();
+        if (step.Kind != CropKind.None)
+        {
+            // The backdrop ignores the window region (see Frames.GetBackdrop): it must be off while cropped.
+            if (!backdrops.ContainsKey(hwnd) && Frames.GetBackdrop(hwnd) is { } original) backdrops[hwnd] = original;
+            SaveState(); // records the original backdrop before we change it
+            Frames.SetBackdrop(hwnd, DWMSBT_NONE); // every crop step: some apps set their backdrop again
+            Frames.SetFrameRendering(hwnd, false);  // the DWM frame also ignores the region
+        }
         switch (step.Kind)
         {
             case CropKind.Apply:
@@ -432,9 +449,10 @@ static class Program
     {
         if (!crops.TryGetValue(hwnd, out var tracker)) return;
         if (tracker.Uncrop() is not { } slot) return; // never cropped (e.g. app fullscreen)
-        SaveState();
         Frames.SetRegion(hwnd, null);
         Frames.MoveUnclamped(hwnd, slot);
+        BackdropRestore(hwnd);
+        SaveState();
         Log.Info($"uncrop {Describe(hwnd)} -> {slot}");
     }
 

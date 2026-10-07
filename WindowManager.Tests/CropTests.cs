@@ -96,6 +96,21 @@ public class ChromeCropTests
         Assert.Equal(new Rect(-8, 0, 1179, 1200), t.Slot);           // slot widened, not moved up
     }
 
+    // Measured on maximized Vivaldi: content top at -1448 on a monitor starting at -1440, bar 30px. Only 22px of the
+    // bar is on screen; cutting 30 from the content top hid 8px of the page and the side tabs' top edge.
+    [Fact]
+    public void Bar_above_the_monitor_edge_is_not_cut_again()
+    {
+        var window = new Rect(-647, -1455, 1927, 7);
+        var client = new Rect(-640, -1448, 1920, 0);
+        var step = new CropTracker().OnLocation(window, client, 30, monitorTop: -1440);
+        var shift = window.Top - step.Target.Top;           // the content moved up by this much
+        var rowAtMonitorTop = -1440 - (client.Top - shift); // content row now shown on the monitor's first line
+        Assert.Equal(30, rowAtMonitorTop);                  // exactly where the page starts: nothing of it cut
+        Assert.Equal(30, Crop.VisibleBar(30, new Rect(0, 0, 10, 10), monitorTop: 0)); // no overhang: unchanged
+        Assert.Equal(0, Crop.VisibleBar(5, client, -1440));                            // bar fully off-screen
+    }
+
     [Fact]
     public void Refused_crop_is_not_retried()
     {
@@ -234,6 +249,28 @@ public class CropWin32Tests
 
             Frames.SetRegion(hwnd, null);
             Assert.Equal(0, GetWindowRgnBox(hwnd, out _)); // ERROR = no region
+        }
+        finally { DestroyWindow(hwnd); }
+    }
+
+    // The backdrop is what leaked onto a monitor above (it ignores the region); it must be switchable and restorable.
+    [Fact]
+    public void Backdrop_can_be_turned_off_and_restored()
+    {
+        var hwnd = CreateWindowEx(0, "STATIC", "wm-test", WS_OVERLAPPEDWINDOW, 300, 300, 500, 400,
+            IntPtr.Zero, IntPtr.Zero, GetModuleHandle(null), IntPtr.Zero);
+        try
+        {
+            var original = Frames.GetBackdrop(hwnd);
+            Assert.NotNull(original);
+            Frames.SetBackdrop(hwnd, DWMSBT_NONE);
+            Assert.Equal(DWMSBT_NONE, Frames.GetBackdrop(hwnd));
+            Frames.SetBackdrop(hwnd, original!.Value);
+            Assert.Equal(original, Frames.GetBackdrop(hwnd));
+
+            Frames.SetFrameRendering(hwnd, false);
+            Assert.False(Frames.IsFrameRendered(hwnd));
+            Frames.SetFrameRendering(hwnd, true);
         }
         finally { DestroyWindow(hwnd); }
     }

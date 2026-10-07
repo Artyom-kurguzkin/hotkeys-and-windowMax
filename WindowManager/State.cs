@@ -8,7 +8,8 @@ namespace WindowManager;
 public static class State
 {
     // Slot = the rect Windows had given a cropped window before we stretched it (null if not cropped).
-    public record Entry(long Hwnd, uint OriginalStyle, int[]? Slot);
+    // Backdrop = its system backdrop type before we turned it off for the crop (null if untouched).
+    public record Entry(long Hwnd, uint OriginalStyle, int[]? Slot, uint? Backdrop = null);
 
     public static string DefaultPath => Path.Combine(Log.DefaultDir, "state.json");
 
@@ -40,7 +41,12 @@ public static class State
             var hwnd = (IntPtr)e.Hwnd;
             if (!IsWindow(hwnd)) continue;
             Frames.SetRegion(hwnd, null);
-            if (e.Slot is [var l, var t, var r, var b]) Frames.MoveUnclamped(hwnd, new Rect(l, t, r, b));
+            if (e.Slot is [var l, var t, var r, var b])
+            {
+                Frames.MoveUnclamped(hwnd, new Rect(l, t, r, b));
+                Frames.SetFrameRendering(hwnd, true);
+            }
+            if (e.Backdrop is { } bd) Frames.SetBackdrop(hwnd, bd);
             Frames.Unstrip(hwnd, e.OriginalStyle);
             n++;
         }
