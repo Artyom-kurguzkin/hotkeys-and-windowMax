@@ -1,0 +1,17 @@
+schema: spec-driven
+
+context: |
+  C# (.NET 10, net10.0-windows) replacement for binds.ahk: hotkeys + borderless window manager on Windows 11.
+  No NuGet packages in the app; P/Invoke only. Tests: xUnit in WindowManager.Tests.
+  Architecture rule: decisions live as pure functions/state machines in Logic.cs (plain data in, decisions out);
+  Program.cs only applies them via Win32 and logs. Native.cs holds DllImports.
+  Every spec scenario maps to a unit test where possible (test name mirrors scenario); Win32 side effects are tested
+  against a window the test creates itself, never against the user's apps.
+  Every applied decision and every Win32 failure is logged to %LOCALAPPDATA%\WindowManager\wm.log.
+  Layout is left to Windows (maximize/Snap/Win+Arrow); the app only removes chrome.
+
+rules:
+  specs:
+    - Scenario titles must be usable as test method names (short, imperative)
+  tasks:
+    - Each task that adds logic includes its unit test in the same task
