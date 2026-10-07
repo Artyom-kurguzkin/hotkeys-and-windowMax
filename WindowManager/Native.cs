@@ -117,6 +117,8 @@ public static class Native
     [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO info);
     [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hWnd, int attr, ref uint value, int size);
     [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out uint value, int size);
+    [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out Rect value, int size);
+    public const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
     public const int DWMWA_SYSTEMBACKDROP_TYPE = 38, DWMWA_NCRENDERING_ENABLED = 1, DWMWA_NCRENDERING_POLICY = 2;
     public const uint DWMNCRP_USEWINDOWSTYLE = 0, DWMNCRP_DISABLED = 1;
     public const uint DWMSBT_NONE = 1;

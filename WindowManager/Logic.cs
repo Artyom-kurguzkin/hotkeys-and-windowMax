@@ -24,7 +24,7 @@ public enum Act
     None, AppsKey, Click, Esc, End, Home, ShiftEnd, ShiftHome, NewLineBelow, DesktopLeft, DesktopRight,
     WheelDown, WheelUp, WheelLeft, WheelRight, Quit,
     Close, ToggleMaximize, Minimize, ToggleChrome,
-    ToggleReveal,
+    ToggleReveal, SnapLayouts,
 }
 
 public readonly record struct KeyStroke(int Vk, bool Up);
@@ -63,7 +63,15 @@ public sealed class KeyEngine
         new(Mod.Alt, 'N', Act.Minimize),
         new(Mod.Alt, 'T', Act.ToggleChrome),    ];
 
-    bool tapArmed; // Win+Alt held and nothing else pressed since: releasing either fires ToggleReveal
+    // Modifier-only taps: hold exactly these modifiers, release one, no other key in between.
+    public static Act TapAct(Mod mods) => mods switch
+    {
+        Mod.Win | Mod.Alt => Act.ToggleReveal,
+        Mod.Ctrl | Mod.Win | Mod.Alt => Act.SnapLayouts,
+        _ => Act.None,
+    };
+
+    Act tapArmed; // the tap held right now (None = not a tap); releasing one of its keys fires it
     readonly HashSet<int> held = [];
     readonly HashSet<int> dirty = [];      // Alt/Win keys held while a shortcut fired: their release must be masked
     readonly HashSet<int> suppressed = []; // non-modifier keys whose key-down we swallowed: swallow the key-up too
@@ -104,23 +112,25 @@ public sealed class KeyEngine
                 if (down)
                 {
                     held.Add(vk);
-                    tapArmed = ModsOf(held) == (Mod.Win | Mod.Alt);
+                    // Pressing more modifiers moves to a bigger tap (Win+Alt -> Ctrl+Win+Alt); anything else disarms.
+                    tapArmed = TapAct(ModsOf(held));
                     return Decision.Pass;
                 }
-                held.Remove(vk);
-                if (tapArmed && Vk.IsAltOrWin(vk))
+                if (tapArmed != Act.None)
                 {
-                    // Win+Alt tap: mask this release (no Start/menu bar) and the other key's later release.
-                    tapArmed = false;
+                    // Tap: mask this release (no Start/menu bar) and the other held Alt/Win keys' later releases.
+                    var act = tapArmed;
+                    tapArmed = Act.None;
+                    held.Remove(vk);
                     dirty.Remove(vk);
                     foreach (var h in held) if (Vk.IsAltOrWin(h)) dirty.Add(h);
-                    return new Decision(false, Act.ToggleReveal, MaskFirst: true);
+                    return new Decision(false, act, MaskFirst: true);
                 }
-                tapArmed = false;
+                held.Remove(vk);
                 return dirty.Remove(vk) ? new Decision(false, MaskFirst: true) : Decision.Pass;
             }
             if (!down) return suppressed.Remove(vk) ? new Decision(true) : Decision.Pass;
-            tapArmed = false; // any real key in between means it wasn't a tap
+            tapArmed = Act.None; // any real key in between means it wasn't a tap
         }
 
         var mods = Mods;
@@ -146,6 +156,7 @@ public sealed class KeyEngine
     public static KeyStroke[] Output(Act act) => act switch
     {
         Act.AppsKey => Tap(Vk.Apps),
+        Act.SnapLayouts => Tap(Vk.LWin, 'Z'), // Windows 11 Snap Layouts for the active window
         Act.Esc => Tap(Vk.Esc),
         Act.End => Tap(Vk.End),
         Act.Home => Tap(Vk.Home),
@@ -343,6 +354,15 @@ public static class Crop
 
     // Maximized Chromium windows start their content above the monitor edge (measured: Vivaldi 8px). That part of
     // the bar is already off-screen; cropping the full height on top of it cut 8px into the page/side tabs.
+    // Snapped/floating windows: Windows lays out the window's visible frame (DWM extended frame bounds), but Chromium
+    // draws its content inside invisible 7px borders. Once a cropped window's DWM frame is off, the frame bounds equal
+    // the window rect, so a snap left 7px gaps left/right/bottom (measured on Vivaldi). Grow the window by its own
+    // insets so the content fills the intended rect. The top stays: the bar starts at the client top.
+    public static (Rect Window, Rect Client) FillVisible(Rect window, Rect client, Rect visible) =>
+        (new Rect(visible.Left - (client.Left - window.Left), window.Top,
+                  visible.Right + (window.Right - client.Right), visible.Bottom + (window.Bottom - client.Bottom)),
+         new Rect(visible.Left, client.Top, visible.Right, visible.Bottom));
+
     public static int VisibleBar(int n, Rect slotClient, int monitorTop) =>
         Math.Max(0, n - Math.Max(0, monitorTop - slotClient.Top));
 
@@ -359,7 +379,9 @@ public static class Crop
     }
 }
 
-public enum CropKind { None, RegionOnly, Apply }
+// Refused: the window is back on the slot right after our crop move (an app veto, or Windows re-applying a Snap
+// Layout position after its animation). Our clip no longer matches the window and must be removed.
+public enum CropKind { None, RegionOnly, Apply, Refused }
 
 public readonly record struct CropStep(CropKind Kind, Rect Target = default, Rect Region = default)
 {
@@ -373,14 +395,21 @@ public sealed class CropTracker
     readonly List<(Rect Target, Rect Slot, Rect SlotClient, Rect Region)> history = [];
     (Rect Window, Rect Target)? lastAttempt;
 
+    public const int MaxRetries = 3;
+    public int Refusals { get; private set; } // consecutive refused crops of the same slot
+    Rect? refusedSlot;
+    bool awaitingRetry; // refused: ignore location events for this slot until Retry()
+
     public Rect? Applied { get; private set; } // the rect we last put the window at (or recognised as ours)
     public Rect? Slot => Current()?.Slot;      // where Windows had put it before we cropped (null = not cropped)
 
     // n = the bar height measured from the content top. monitorTop: the part of the bar already above the monitor
     // edge is hidden anyway and must not be cut again.
-    public CropStep OnLocation(Rect window, Rect client, int n, int monitorTop = int.MinValue)
+    // visible: for non-maximized windows, the rect Windows meant the window to occupy (DWM frame bounds); null to
+    // keep the window's own rect.
+    public CropStep OnLocation(Rect window, Rect client, int n, int? monitorTop = null, Rect? visible = null)
     {
-        if (Applied == window) return CropStep.None; // our own move echoing back
+        if (Applied == window) { Refusals = 0; return CropStep.None; } // our own move echoing back: it stuck
 
         // Windows put it back on a rect we produced earlier (e.g. restore-from-maximize remembers our cropped
         // normal rect): it's already cropped, only the clip needs refreshing for that size.
@@ -396,15 +425,43 @@ public sealed class CropTracker
         // keep the slot's vertical extent and take only the new horizontal one. Treating it as a slot crops twice.
         if (Applied is { } a && window.Top == a.Top && Current() is { } c)
         {
+            if (visible is { } v) (window, client) = Crop.FillVisible(window, client, v with { Bottom = client.Bottom });
             window = window with { Top = c.Slot.Top, Bottom = c.Slot.Bottom };
             client = client with { Top = c.SlotClient.Top, Bottom = c.SlotClient.Bottom };
         }
+        else if (history.FindLastIndex(h => h.Slot == window) is var j and >= 0)
+        {
+            // Back on a slot we computed ourselves (uncrop for reveal / Alt+T moved it there): it already fills its
+            // area. Widening it again from the frame bounds overshot by the border width (measured: 7px spill).
+            client = history[j].SlotClient;
+        }
+        else if (visible is { } v)
+        {
+            (window, client) = Crop.FillVisible(window, client, v);
+        }
 
-        var (target, region) = Crop.Plan(window, client, Crop.VisibleBar(n, client, monitorTop));
-        if (lastAttempt == (window, target)) return CropStep.None; // app refused this exact crop already
+        var (target, region) = Crop.Plan(window, client, monitorTop is { } mt ? Crop.VisibleBar(n, client, mt) : n);
+        if (lastAttempt == (window, target))
+        {
+            // Removing the clip makes Windows report the location again: stay quiet until Retry(), or the caller's
+            // reaction to Refused feeds itself (measured: a storm of hundreds of events per ms on Slack).
+            if (awaitingRetry) return CropStep.None;
+            awaitingRetry = true;
+            // Back on the slot after this exact crop: refused. Not retried from location events (that would fight an
+            // app forever); the caller drops the clip and may Retry() later, up to MaxRetries.
+            if (refusedSlot != window) Refusals = 0; // counted per slot
+            refusedSlot = window;
+            Refusals++;
+            Applied = null;
+            return new CropStep(CropKind.Refused);
+        }
         lastAttempt = (window, target);
+        awaitingRetry = false; // a new attempt (new slot or a retry) may be refused again
         return Remember(target, window, client, region);
     }
+
+    // Allow the refused crop to be attempted again (after Windows' snap animation has settled).
+    public void Retry() { lastAttempt = null; awaitingRetry = false; }
 
     // Stop cropping; returns the slot to move the window back to (null if it wasn't cropped).
     public Rect? Uncrop()
@@ -412,6 +469,8 @@ public sealed class CropTracker
         var slot = Current()?.Slot;
         Applied = null;
         lastAttempt = null;
+        Refusals = 0;
+        awaitingRetry = false;
         return slot;
     }
 

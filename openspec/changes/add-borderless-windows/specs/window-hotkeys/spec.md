@@ -41,3 +41,25 @@ The system SHALL show or hide the title bar of the active window on Alt+T. A win
 #### Scenario: AltT hides title bar again
 - **WHEN** the user presses Alt+T on a window whose title bar was toggled on
 - **THEN** its title bar is removed again
+
+### Requirement: Snap layouts
+The system SHALL open the Windows 11 Snap Layouts menu for the active window (Win+Z) on a tap of Ctrl+Win+Alt: the three keys pressed in any order, then one released, with no other key in between. The tap SHALL NOT open the Start menu or a menu bar.
+
+#### Scenario: CtrlWinAlt tap opens snap layouts
+- **WHEN** the user presses Ctrl, Win and Alt in any order and releases one with no other key in between
+- **THEN** Win+Z is sent and the releases are masked
+
+#### Scenario: CtrlWinAlt with another key is not a tap
+- **WHEN** the user presses another key before releasing
+- **THEN** Snap Layouts is not opened
+
+#### Scenario: CtrlShiftWinAlt is not a tap
+- **WHEN** Shift is also held (the Office key chord)
+- **THEN** Snap Layouts is not opened
+
+### Requirement: Windows tiled by Snap Layouts have no gaps
+The system SHALL keep cropped windows flush with the zone Snap Layouts gives them, even though Windows re-applies each window's position after its animation.
+
+#### Scenario: Snap layout override is retried then given up
+- **WHEN** a cropped window is moved back to its zone right after being cropped
+- **THEN** it is checked again after 300 ms and cropped again, up to 3 times, after which its clip is removed so no gaps remain

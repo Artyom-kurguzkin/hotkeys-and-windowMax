@@ -8,7 +8,7 @@ Many apps draw their own title bar inside the window: Chrome, Edge, Vivaldi, VS 
 
 - Windows that draw their own top bar have it cropped off. The window is stretched upward by the bar's height and the bar is clipped, so the content still fills the area Windows gave it. This works for maximized, snapped and floating windows.
 - Cropped bars never show on a monitor above.
-- A tap of Win+Alt (press both, release, no other key) shows the hidden bars on all windows. A second tap hides them again. Neither tap opens the Start menu.
+- A tap of Win+Alt (press both, release, no other key) shows the hidden bar of the active window only. A second tap hides it again. Neither tap opens the Start menu.
 - Alt+T on a cropped window shows its bar until Alt+T is pressed again.
 - Crop height is set per app (in DPI-independent units) and scaled to each window's DPI.
   - A hand-edited `crop.json` can override the defaults. No hotkey changes crop heights.

@@ -25,7 +25,9 @@ static class Program
     static IntPtr msgWnd;
 
     const uint HoverIntervalMs = 700, AltSettleMs = 50, WatchdogMs = 30;
-    static readonly UIntPtr TimerHover = 1, TimerAltReleased = 2, TimerWatchdog = 3;
+    static readonly UIntPtr TimerHover = 1, TimerAltReleased = 2, TimerWatchdog = 3, TimerCropRetry = 4;
+    const uint CropRetryMs = 300; // Snap Layouts re-applies its position after the animation; retry after that
+    static readonly HashSet<IntPtr> cropRetries = [];
     static IntPtr prevActive, lastHover;
 
     const string TrackPointMatch = "LEN0325"; // substring of the TrackPoint's raw-input device path (Device Manager → hardware IDs)
@@ -37,12 +39,13 @@ static class Program
     static bool AltHeld => keys.Mods.HasFlag(Mod.Alt);
 
     // Window changes run off the keyboard hook callback (Windows drops hooks that take too long).
-    const uint WM_APP_TOGGLE_CHROME = 0x8001, WM_APP_TOGGLE_REVEAL = 0x8002;
+    const uint WM_APP_TOGGLE_CHROME = 0x8001, WM_APP_TOGGLE_REVEAL = 0x8002, WM_APP_MOVED = 0x8004;
+    static readonly HashSet<IntPtr> movedWindows = []; // managed windows with a pending location change
     static readonly Dictionary<IntPtr, CropTracker> crops = [];  // self-drawn title bar windows
     static readonly Dictionary<IntPtr, uint> backdrops = [];     // original backdrop of windows we turned it off for
     static readonly Dictionary<string, int> cropOverrides = new(StringComparer.OrdinalIgnoreCase); // tuned DIP per process
     static readonly Dictionary<IntPtr, string> names = [];
-    static bool revealed;
+    static readonly HashSet<IntPtr> revealed = []; // cropped bar shown again with Win+Alt
     static readonly Dictionary<IntPtr, uint> managed = []; // hwnd → original style
     static readonly HashSet<IntPtr> userShown = [];         // title bar toggled back on with Alt+T
     static readonly Dictionary<IntPtr, (Rect Window, Rect Target)> coverAttempts = [];
@@ -170,7 +173,9 @@ static class Program
                     case WM_TIMER: OnTimer((UIntPtr)(ulong)wParam); break;
                     case WM_INPUT: OnRawInput(lParam); break;
                     case WM_APP_TOGGLE_CHROME: ToggleChrome(GetForegroundWindow()); break;
-                    case WM_APP_TOGGLE_REVEAL: ToggleReveal(); break;                }
+                    case WM_APP_TOGGLE_REVEAL: ToggleReveal(GetForegroundWindow()); break;
+                    case WM_APP_MOVED: HandleMovedWindows(); break;
+                }
             }
             catch (Exception e) { Log.Info($"wndproc error msg=0x{msg:X}: {e}"); }
             return DefWindowProc(hWnd, msg, wParam, lParam); // WM_CLOSE → DestroyWindow; WM_INPUT cleanup
@@ -269,6 +274,17 @@ static class Program
         if (id == TimerHover) HoverFocus();
         else if (id == TimerWatchdog) { if (scroller.InGesture && !AltHeld) StopGesture("watchdog"); }
         else if (id == TimerAltReleased) { KillTimer(msgWnd, id); CenterAfterSwitch(); }
+        else if (id == TimerCropRetry)
+        {
+            KillTimer(msgWnd, id);
+            foreach (var hwnd in cropRetries.ToArray())
+            {
+                cropRetries.Remove(hwnd);
+                if (!crops.TryGetValue(hwnd, out var t) || !IsWindow(hwnd)) continue;
+                t.Retry();
+                ApplyCrop(hwnd);
+            }
+        }
     }
 
     // ---- focus ----
@@ -362,24 +378,37 @@ static class Program
             {
                 case EVENT_OBJECT_SHOW: Manage(hwnd); break;
                 case EVENT_OBJECT_DESTROY:
-                    userShown.Remove(hwnd); coverAttempts.Remove(hwnd); crops.Remove(hwnd); names.Remove(hwnd); backdrops.Remove(hwnd);
+                    userShown.Remove(hwnd); coverAttempts.Remove(hwnd); crops.Remove(hwnd); names.Remove(hwnd); backdrops.Remove(hwnd); revealed.Remove(hwnd);
                     if (managed.Remove(hwnd)) SaveState();
                     break;
                 case EVENT_OBJECT_LOCATIONCHANGE when !managed.ContainsKey(hwnd):
                     if (Focus.IsRealWindow(Frames.Style(hwnd)) || Frames.ClassName(hwnd) == Chrome.UwpFrameClass) Manage(hwnd); // e.g. restored from minimized
                     break;
                 case EVENT_OBJECT_LOCATIONCHANGE:
-                    if (Chrome.NeedsRestrip(Frames.Style(hwnd), userShown.Contains(hwnd)))
-                    {
-                        Log.Info($"restrip {Describe(hwnd)} (app restored its caption)");
-                        Frames.Strip(hwnd);
-                    }
-                    if (crops.ContainsKey(hwnd)) ApplyCrop(hwnd);
-                    else CoverIfMaximized(hwnd);
+                    // Deferred to our own message loop: our window calls (SetWindowRgn, SetWindowLong) dispatch nested
+                    // WinEvents, and handling them in place re-entered the crop logic mid-step (measured: impossible
+                    // refusal counts, a missed retry). Also merges a snap animation's event burst into one pass.
+                    if (movedWindows.Add(hwnd) && movedWindows.Count == 1) PostMessage(msgWnd, WM_APP_MOVED, IntPtr.Zero, IntPtr.Zero);
                     break;
             }
         }
         catch (Exception e) { Log.Info($"win event 0x{evt:X} error: {e}"); }
+    }
+
+    static void HandleMovedWindows()
+    {
+        foreach (var hwnd in movedWindows.ToArray())
+        {
+            movedWindows.Remove(hwnd);
+            if (!managed.ContainsKey(hwnd) || !IsWindow(hwnd)) continue;
+            if (Chrome.NeedsRestrip(Frames.Style(hwnd), userShown.Contains(hwnd)))
+            {
+                Log.Info($"restrip {Describe(hwnd)} (app restored its caption)");
+                Frames.Strip(hwnd);
+            }
+            if (crops.ContainsKey(hwnd)) ApplyCrop(hwnd);
+            else CoverIfMaximized(hwnd);
+        }
     }
 
     static void CoverIfMaximized(IntPtr hwnd)
@@ -403,7 +432,7 @@ static class Program
 
     static void ApplyCrop(IntPtr hwnd)
     {
-        if (revealed || userShown.Contains(hwnd) || IsIconic(hwnd) || !crops.TryGetValue(hwnd, out var tracker)) return;
+        if (revealed.Contains(hwnd) || userShown.Contains(hwnd) || IsIconic(hwnd) || !crops.TryGetValue(hwnd, out var tracker)) return;
         if (!GetWindowRect(hwnd, out var window)) return;
         if (Crop.IsAppFullscreen(window, Frames.MonitorRect(hwnd)))
         {
@@ -417,13 +446,14 @@ static class Program
             }
             return;
         }
-        ApplyStep(hwnd, tracker.OnLocation(window, Frames.ClientOnScreen(hwnd), CropPixels(hwnd), Frames.MonitorRect(hwnd).Top), window);
+        var visible = IsZoomed(hwnd) ? null : Frames.FrameBounds(hwnd); // maximized: client already fills the monitor
+        ApplyStep(hwnd, tracker.OnLocation(window, Frames.ClientOnScreen(hwnd), CropPixels(hwnd), Frames.MonitorRect(hwnd).Top, visible), window);
     }
 
     static void ApplyStep(IntPtr hwnd, CropStep step, Rect from)
     {
         // ponytail: rewrites state.json on every crop (a few per window move); debounce if it ever shows up in profiles
-        if (step.Kind != CropKind.None)
+        if (step.Kind is CropKind.Apply or CropKind.RegionOnly)
         {
             // The backdrop ignores the window region (see Frames.GetBackdrop): it must be off while cropped.
             if (!backdrops.ContainsKey(hwnd) && Frames.GetBackdrop(hwnd) is { } original) backdrops[hwnd] = original;
@@ -442,6 +472,24 @@ static class Program
                 Log.Info($"crop {Describe(hwnd)} back on earlier cropped rect {step.Target}: refresh clip only");
                 Frames.SetRegion(hwnd, step.Region);
                 break;
+            case CropKind.Refused:
+                // Seen back on the slot after our crop: Windows re-applying a Snap Layout position after its animation,
+                // a stale event from before our async move landed, or an app veto. Look again once things settle:
+                // the retry re-crops (still on the slot) or just refreshes the clip (it was stale).
+                var refusals = crops.TryGetValue(hwnd, out var t) ? t.Refusals : int.MaxValue;
+                if (refusals <= CropTracker.MaxRetries)
+                {
+                    Log.Info($"crop {Describe(hwnd)} back on its slot {from} after cropping (#{refusals}): re-checking in {CropRetryMs}ms");
+                    cropRetries.Add(hwnd);
+                    StartTimer(TimerCropRetry, CropRetryMs);
+                }
+                else
+                {
+                    // Genuinely refused: a clip made for the stretched rect would cut gaps into the content on the slot.
+                    Frames.SetRegion(hwnd, null);
+                    Log.Info($"crop {Describe(hwnd)} refused {refusals} times at {from}: clip removed, leaving it uncropped");
+                }
+                break;
         }
     }
 
@@ -456,15 +504,20 @@ static class Program
         Log.Info($"uncrop {Describe(hwnd)} -> {slot}");
     }
 
-    static void ToggleReveal()
+    // Win+Alt: show or hide the cropped bar of the active window only.
+    static void ToggleReveal(IntPtr hwnd)
     {
-        revealed = !revealed;
-        Log.Info($"reveal {(revealed ? "on" : "off")} ({crops.Count} self-drawn windows)");
-        foreach (var hwnd in crops.Keys.ToArray())
+        if (!crops.ContainsKey(hwnd) || userShown.Contains(hwnd)) { Log.Info($"reveal: {Describe(hwnd)} has no cropped bar"); return; }
+        if (revealed.Remove(hwnd))
         {
-            if (userShown.Contains(hwnd)) continue; // individually shown via Alt+T: leave alone
-            if (revealed) Uncrop(hwnd);
-            else ApplyCrop(hwnd);
+            Log.Info($"reveal off {Describe(hwnd)}");
+            ApplyCrop(hwnd);
+        }
+        else
+        {
+            revealed.Add(hwnd);
+            Log.Info($"reveal on {Describe(hwnd)}");
+            Uncrop(hwnd);
         }
     }
 
@@ -497,7 +550,8 @@ static class Program
         }
         else
         {
-            if (!revealed) Uncrop(hwnd);
+            Uncrop(hwnd); // no-op if Win+Alt already revealed it
+            revealed.Remove(hwnd);
             userShown.Add(hwnd);
             Frames.Unstrip(hwnd, original);
             Log.Info($"toggle chrome on {Describe(hwnd)}");

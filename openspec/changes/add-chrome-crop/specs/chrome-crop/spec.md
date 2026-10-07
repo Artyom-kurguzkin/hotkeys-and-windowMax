@@ -32,6 +32,14 @@ The system SHALL stretch each window with a self-drawn title bar upward by its c
 - **WHEN** Windows moves the window back to a rect that the system had already produced by cropping
 - **THEN** only the clip is refreshed and the window is not extended again
 
+#### Scenario: Snapped window content fills the snap area
+- **WHEN** a cropped window is snapped (for example with Win+Left) or otherwise placed while not maximized
+- **THEN** its visible content meets the edges of the area Windows gave it, with no gap at the sides or bottom
+
+#### Scenario: Reveal and hide again does not widen twice
+- **WHEN** a cropped window is revealed and then hidden again
+- **THEN** it returns to exactly the same crop as before
+
 #### Scenario: Bar above the monitor edge is not cut again
 - **WHEN** a maximized window's content starts above its monitor's top edge, so part of its bar is already off-screen
 - **THEN** only the on-screen part of the bar is cropped, and the content row where the page starts lands exactly on the monitor's top edge
@@ -93,19 +101,23 @@ The system SHALL read per-app crop heights from the built-in defaults, overridde
 - **THEN** no crop height is changed and crop.json is not written
 
 ### Requirement: Reveal hidden bars
-The system SHALL toggle a global reveal on a tap of Win+Alt: both keys pressed, then released, with no other key in between. While revealed, cropped windows SHALL show their full title bars in their assigned areas. The tap SHALL NOT open the Start menu or a menu bar.
+The system SHALL toggle the reveal of the active window only on a tap of Win+Alt: both keys pressed, then released, with no other key in between. While revealed, that window SHALL show its full title bar in its assigned area, and every other window SHALL stay cropped. The tap SHALL NOT open the Start menu or a menu bar.
 
 #### Scenario: WinAlt tap reveals
 - **WHEN** the user presses Win, presses Alt, and releases them with no other key in between
-- **THEN** the reveal is toggled and the release is masked so Start does not open
+- **THEN** the active window's reveal is toggled and the release is masked so Start does not open
+
+#### Scenario: Only the active window is revealed
+- **WHEN** the user taps Win+Alt while several cropped windows are open
+- **THEN** only the active window shows its bar, and the others stay cropped
 
 #### Scenario: WinAlt with another key is not a tap
 - **WHEN** the user presses Win+Alt and then another key before releasing
 - **THEN** the reveal is not toggled
 
 #### Scenario: Second tap hides again
-- **WHEN** the reveal is on and the user taps Win+Alt again
-- **THEN** the bars are cropped again
+- **WHEN** the active window is revealed and the user taps Win+Alt again
+- **THEN** its bar is cropped again
 
 ### Requirement: Per-window reveal
 The system SHALL show the full title bar of the active cropped window on Alt+T, and crop it again on the next Alt+T.

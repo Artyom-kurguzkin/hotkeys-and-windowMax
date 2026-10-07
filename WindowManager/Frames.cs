@@ -53,6 +53,10 @@ public static class Frames
         return new Rect(tl.X, tl.Y, tl.X + c.Width, tl.Y + c.Height);
     }
 
+    // The rect Windows treats as the window's visible frame (what Snap aligns to the screen).
+    public static Rect? FrameBounds(IntPtr hwnd) =>
+        DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, out Rect r, System.Runtime.InteropServices.Marshal.SizeOf<Rect>()) == 0 ? r : null;
+
     public static Rect MonitorRect(IntPtr hwnd)
     {
         var mi = new MONITORINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<MONITORINFO>() };
@@ -77,7 +81,7 @@ public static class Frames
     // region, so a cropped window's hidden strip shows as a #202020 band on a monitor above (measured on VS Code:
     // 63 grey rows with backdrop type 2, 0 with DWMSBT_NONE). Cropped windows get no backdrop; restore afterwards.
     public static uint? GetBackdrop(IntPtr hwnd) =>
-        DwmGetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, out var v, sizeof(uint)) == 0 ? v : null;
+        DwmGetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, out uint v, sizeof(uint)) == 0 ? v : null;
 
     public static void SetBackdrop(IntPtr hwnd, uint type)
     {
@@ -95,7 +99,7 @@ public static class Frames
     }
 
     public static bool IsFrameRendered(IntPtr hwnd) =>
-        DwmGetWindowAttribute(hwnd, DWMWA_NCRENDERING_ENABLED, out var v, sizeof(uint)) == 0 && v != 0;
+        DwmGetWindowAttribute(hwnd, DWMWA_NCRENDERING_ENABLED, out uint v, sizeof(uint)) == 0 && v != 0;
 
     // Region in window coordinates; null removes it. The system owns the region once SetWindowRgn succeeds.
     public static void SetRegion(IntPtr hwnd, Rect? region)

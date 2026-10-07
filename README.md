@@ -3,7 +3,7 @@
 A Windows 11 hotkey daemon and borderless window manager. It replaces `binds.ahk`.
 
 - Every app window loses its title bar, border and rounded corners. Layout stays with Windows: maximize, Snap, Win+Arrow and moving between monitors all work as usual.
-- Apps that draw their own title bar or tab strip (Chrome, Edge, Vivaldi, VS Code, Electron apps, Explorer, Outlook, Terminal) have it cropped off. Win+Alt shows it again.
+- Apps that draw their own title bar or tab strip (Chrome, Edge, Vivaldi, VS Code, Electron apps, Explorer, Outlook, Terminal) have it cropped off. Win+Alt shows it again on the active window.
 - Window control is done with hotkeys. The `binds.ahk` binds are ported: line navigation, scrolling, desktop switching, hover-to-focus, and Alt+TrackPoint scrolling.
 
 ## Run
@@ -25,7 +25,8 @@ dist\WindowManager.exe                              # runs in the background, no
 |---|---|
 | Alt+Q / Alt+M / Alt+N | Close / maximize or restore / minimize the active window |
 | Alt+T | Show or hide the title bar and tab strip of the active window |
-| Win+Alt (tap) | Show or hide the cropped tab strips on all windows |
+| Win+Alt (tap) | Show or hide the cropped tab strip of the active window |
+| Ctrl+Win+Alt (tap) | Open Snap Layouts (Win+Z) to tile the active window |
 | Alt + TrackPoint | Scroll in any direction. The cursor stays still |
 | Alt+H / J / K / L | Scroll left / down / up / right |
 | Alt+[ / Alt+] | Home / End. Add Shift to select |

@@ -111,12 +111,91 @@ public class ChromeCropTests
         Assert.Equal(0, Crop.VisibleBar(5, client, -1440));                            // bar fully off-screen
     }
 
+    // Measured: Win+Left on the 2560x1440 monitor gave Vivaldi the window rect (-640,-1440 853x1440) exactly, because
+    // with its DWM frame off the frame bounds equal the window rect. Its content sits 7px inside (left/right/bottom),
+    // which left 7px gaps on the left and at the bottom.
     [Fact]
-    public void Refused_crop_is_not_retried()
+    public void Snapped_window_content_fills_the_snap_area()
+    {
+        var window = new Rect(-640, -1440, 213, 0);
+        var client = new Rect(-633, -1440, 206, -7);
+        var step = new CropTracker().OnLocation(window, client, 30, monitorTop: -1440, visible: window);
+
+        var visibleOnScreen = ToScreen(step.Target, step.Region);
+        Assert.Equal(new Rect(-640, -1440, 213, 0), visibleOnScreen); // edge to edge, no gaps; bar cropped above
+        Assert.Equal(-1470, step.Target.Top);
+    }
+
+    [Fact]
+    public void Reveal_and_hide_again_does_not_widen_twice()
+    {
+        var t = new CropTracker();
+        var window = new Rect(-640, -1440, 213, 0);
+        var client = new Rect(-633, -1440, 206, -7);
+        var first = t.OnLocation(window, client, 30, -1440, visible: window);
+        var slot = t.Uncrop()!.Value; // reveal: window goes back to the (already widened) slot
+
+        // hide again: the frame bounds now read differently, but the window is on our own slot
+        var again = t.OnLocation(slot, new Rect(slot.Left + 7, slot.Top, slot.Right - 7, slot.Bottom - 7), 30, -1440, visible: slot);
+        Assert.Equal(first.Target, again.Target);
+        Assert.Equal(first.Region, again.Region);
+    }
+
+    [Fact]
+    public void FillVisible_keeps_a_window_that_already_fits()
+    {
+        var (w, c) = Crop.FillVisible(FloatWindow, FloatClient, FloatClient);
+        Assert.Equal(FloatWindow, w);
+        Assert.Equal(FloatClient, c);
+    }
+
+    [Fact]
+    public void Refused_crop_is_not_retried_from_location_events()
     {
         var t = new CropTracker();
         t.OnLocation(MaxWindow, MaxClient, 60);
-        Assert.Equal(CropStep.None, t.OnLocation(MaxWindow, MaxClient, 60)); // app snapped back to the slot
+        Assert.Equal(CropKind.Refused, t.OnLocation(MaxWindow, MaxClient, 60).Kind); // snapped back to the slot
+        // Removing the clip re-reports the same location: must stay quiet, or Refused -> remove clip -> event loops
+        Assert.Equal(CropKind.None, t.OnLocation(MaxWindow, MaxClient, 60).Kind);
+        Assert.Equal(CropKind.None, t.OnLocation(MaxWindow, MaxClient, 60).Kind);
+        Assert.Equal(1, t.Refusals);
+    }
+
+    // Measured with Snap Layouts (Win+Z): Windows re-applies each window's position after its animation, right after
+    // our crop. That is not an app veto: retrying once the animation settled makes the crop stick.
+    [Fact]
+    public void Snap_layout_override_is_retried_then_given_up()
+    {
+        var t = new CropTracker();
+        var first = t.OnLocation(FloatWindow, FloatClient, 60);
+        var log = new List<string>();
+        for (var i = 1; i <= CropTracker.MaxRetries; i++)
+        {
+            var refused = t.OnLocation(FloatWindow, FloatClient, 60);
+            log.Add($"{i}:{refused.Kind}/{t.Refusals}");
+            t.Retry();
+            var retried = t.OnLocation(FloatWindow, FloatClient, 60);
+            log.Add($"{i}r:{retried.Kind}");
+        }
+        Assert.Equal("1:Refused/1 1r:Apply 2:Refused/2 2r:Apply 3:Refused/3 3r:Apply", string.Join(" ", log));
+        Assert.Equal(CropKind.Refused, t.OnLocation(FloatWindow, FloatClient, 60).Kind);
+        Assert.True(t.Refusals > CropTracker.MaxRetries); // caller stops retrying this slot
+
+        t.OnLocation(MaxWindow, MaxClient, 60);                  // a different slot
+        t.OnLocation(MaxWindow, MaxClient, 60);
+        Assert.Equal(1, t.Refusals);                             // gets its own retries
+    }
+
+    [Fact]
+    public void Crop_that_sticks_resets_refusals()
+    {
+        var t = new CropTracker();
+        var step = t.OnLocation(FloatWindow, FloatClient, 60);
+        t.OnLocation(FloatWindow, FloatClient, 60); // refused once
+        t.Retry();
+        step = t.OnLocation(FloatWindow, FloatClient, 60);
+        t.OnLocation(step.Target, FloatClient with { Top = 140 }, 60); // our move echoes back: it stuck
+        Assert.Equal(0, t.Refusals);
     }
 
     [Fact]
@@ -212,6 +291,35 @@ public class RevealTapTests
     {
         e.Feed(Vk.LAlt, true, false);
         Assert.Equal(Decision.Pass, e.Feed(Vk.LAlt, false, false));
+    }
+
+    [Theory]
+    [InlineData(Vk.LCtrl, Vk.LWin, Vk.LAlt, Vk.LCtrl)] // release Ctrl first
+    [InlineData(Vk.LWin, Vk.LAlt, Vk.LCtrl, Vk.LAlt)]  // any press order, release Alt first
+    [InlineData(Vk.LAlt, Vk.LCtrl, Vk.RWin, Vk.RWin)]
+    public void CtrlWinAlt_tap_opens_snap_layouts(int a, int b, int c, int releaseFirst)
+    {
+        e.Feed(a, true, false);
+        e.Feed(b, true, false);
+        e.Feed(c, true, false);
+        Assert.Equal(new Decision(false, Act.SnapLayouts, MaskFirst: true), e.Feed(releaseFirst, false, false));
+        Assert.Equal(KeyEngine.Tap(Vk.LWin, 'Z'), KeyEngine.Output(Act.SnapLayouts));
+    }
+
+    [Fact]
+    public void CtrlWinAlt_with_another_key_is_not_a_tap()
+    {
+        foreach (var k in new[] { Vk.LCtrl, Vk.LWin, Vk.LAlt }) e.Feed(k, true, false);
+        e.Feed(Vk.Left, true, false);
+        e.Feed(Vk.Left, false, false);
+        Assert.Equal(Act.None, e.Feed(Vk.LCtrl, false, false).Act);
+    }
+
+    [Fact]
+    public void CtrlShiftWinAlt_is_not_a_tap() // the Office key chord
+    {
+        foreach (var k in new[] { Vk.LCtrl, Vk.LShift, Vk.LWin, Vk.LAlt }) e.Feed(k, true, false);
+        Assert.Equal(Act.None, e.Feed(Vk.LAlt, false, false).Act);
     }
 
     [Fact]
