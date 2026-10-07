@@ -129,6 +129,33 @@ public static class Native
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, char[] buf, int max);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, char[] buf, int max);
 
+    // Highlight border overlay and hotkey list
+    public const int WM_ERASEBKGND = 0x0014, SW_HIDE = 0, SW_SHOWNOACTIVATE = 4;
+    public const uint WS_POPUP_STYLE = 0x80000000;
+    public const uint WS_EX_LAYERED = 0x80000, WS_EX_TRANSPARENT = 0x20, WS_EX_TOPMOST = 0x8, WS_EX_TOOLWINDOW_EX = 0x80, WS_EX_NOACTIVATE = 0x08000000;
+    public const uint LWA_ALPHA = 0x2, SWP_SHOWWINDOW = 0x40;
+    public static readonly IntPtr HWND_TOPMOST = new(-1);
+    public const uint MB_OK = 0, MB_ICONINFORMATION = 0x40, MB_SETFOREGROUND = 0x10000, MB_TOPMOST = 0x40000;
+    [DllImport("dwmapi.dll")] public static extern int DwmGetColorizationColor(out uint argb, out bool opaque);
+    [DllImport("gdi32.dll")] public static extern IntPtr CreateSolidBrush(uint colorref);
+    [DllImport("user32.dll")] public static extern int FillRect(IntPtr hdc, ref Rect rect, IntPtr brush);
+    [DllImport("user32.dll")] public static extern bool InvalidateRect(IntPtr hWnd, IntPtr rect, bool erase);
+    [DllImport("user32.dll")] public static extern bool SetLayeredWindowAttributes(IntPtr hWnd, uint key, byte alpha, uint flags);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int MessageBox(IntPtr hWnd, string text, string caption, uint type);
+
+    // Move between monitors
+    public const int SW_SHOWNORMAL = 1, SW_SHOWMAXIMIZED = 3;
+    [StructLayout(LayoutKind.Sequential)]
+    public struct WINDOWPLACEMENT { public int length, flags, showCmd; public POINT ptMin, ptMax; public Rect rcNormal; }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct MONITORINFOEX { public int cbSize; public Rect rcMonitor, rcWork; public uint dwFlags; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice; }
+    public delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdc, IntPtr rect, IntPtr data);
+    [DllImport("user32.dll")] public static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MonitorEnumProc fn, IntPtr data);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX info);
+    [DllImport("user32.dll", SetLastError = true)] public static extern bool GetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT wp);
+    [DllImport("user32.dll", SetLastError = true)] public static extern bool SetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT wp);
+    public const uint MONITOR_DEFAULTTOPRIMARY = 1;
+
     // Crop
     public const uint SWP_NOSENDCHANGING = 0x400;
     [DllImport("user32.dll")] public static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool redraw);

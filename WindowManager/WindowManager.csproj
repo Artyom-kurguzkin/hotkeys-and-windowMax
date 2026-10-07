@@ -6,6 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <UseWindowsForms>true</UseWindowsForms> <!-- only for the hotkey list window -->
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <!-- dotnet publish WindowManager -r win-x64 -o dist  →  dist\WindowManager.exe (uses the installed .NET 10 runtime) -->
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>

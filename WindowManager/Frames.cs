@@ -57,6 +57,27 @@ public static class Frames
     public static Rect? FrameBounds(IntPtr hwnd) =>
         DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, out Rect r, System.Runtime.InteropServices.Marshal.SizeOf<Rect>()) == 0 ? r : null;
 
+    public record Monitor(IntPtr Handle, string Device, Rect Bounds, Rect Work, bool Primary);
+
+    public static List<Monitor> AllMonitors()
+    {
+        var list = new List<Monitor>();
+        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (h, _, _, _) =>
+        {
+            if (Info(h) is { } m) list.Add(m);
+            return true;
+        }, IntPtr.Zero);
+        return list;
+    }
+
+    public static Monitor? MonitorOf(IntPtr hwnd) => Info(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST));
+
+    static Monitor? Info(IntPtr h)
+    {
+        var mi = new MONITORINFOEX { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<MONITORINFOEX>() };
+        return GetMonitorInfo(h, ref mi) ? new Monitor(h, mi.szDevice, mi.rcMonitor, mi.rcWork, (mi.dwFlags & 1) != 0) : null;
+    }
+
     public static Rect MonitorRect(IntPtr hwnd)
     {
         var mi = new MONITORINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<MONITORINFO>() };

@@ -2,9 +2,13 @@ schema: spec-driven
 
 context: |
   C# (.NET 10, net10.0-windows) replacement for binds.ahk: hotkeys + borderless window manager on Windows 11.
-  No NuGet packages in the app; P/Invoke only. Tests: xUnit in WindowManager.Tests.
+  No NuGet packages in the app; P/Invoke only (WinForms, part of the desktop runtime, only for the hotkey table).
+  Tests: xUnit in WindowManager.Tests.
   Architecture rule: decisions live as pure functions/state machines in Logic.cs (plain data in, decisions out);
-  Program.cs only applies them via Win32 and logs. Native.cs holds DllImports.
+  Program.cs only applies them via Win32 and logs. Frames.cs = Win32 operations on other windows, State.cs =
+  recovery state, HelpWindow.cs = hotkey table, Native.cs = DllImports.
+  Threading rule: never call SendInput on the hook thread (deadlock); never do window work inside a WinEvent
+  callback (re-entrancy) - post to the message loop.
   Every spec scenario maps to a unit test where possible (test name mirrors scenario); Win32 side effects are tested
   against a window the test creates itself, never against the user's apps.
   Every applied decision and every Win32 failure is logged to %LOCALAPPDATA%\WindowManager\wm.log.

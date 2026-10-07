@@ -141,6 +141,23 @@ public class ChromeCropTests
         Assert.Equal(first.Region, again.Region);
     }
 
+    // Measured on maximized VS Code: window (-11,-11)-(1931,1211), client (0,0)-(1920,1198) on a 1920x1200 panel.
+    [Fact]
+    public void Maximized_window_content_reaches_the_monitor_bottom()
+    {
+        var monitor = new Rect(0, 0, 1920, 1200);
+        var window = new Rect(-11, -11, 1931, 1211);
+        var client = new Rect(0, 0, 1920, 1198);
+        var step = new CropTracker().OnLocation(window, client, 52, monitor.Top, Crop.MaximizedVisible(client, monitor));
+        Assert.Equal(new Rect(0, 0, 1920, 1200), ToScreen(step.Target, step.Region)); // no sliver at the bottom
+    }
+
+    [Theory]
+    [InlineData(1200)] // already reaches the bottom
+    [InlineData(1190)] // a real layout gap, not the auto-hide sliver
+    public void Only_a_small_bottom_sliver_is_filled(int clientBottom) =>
+        Assert.Null(Crop.MaximizedVisible(new Rect(0, 0, 1920, clientBottom), new Rect(0, 0, 1920, 1200)));
+
     [Fact]
     public void FillVisible_keeps_a_window_that_already_fits()
     {
@@ -216,8 +233,8 @@ public class ChromeCropTests
     public void Hand_edited_value_overrides_default() => Assert.Equal(44, Crop.DipFor("msedge", new Dictionary<string, int> { ["msedge"] = 44 }));
 
     [Fact]
-    public void No_hotkey_changes_crop_height() // the only Win chord is the reveal tap, which isn't a binding
-        => Assert.DoesNotContain(KeyEngine.Bindings, b => b.Mods.HasFlag(Mod.Win));
+    public void No_hotkey_changes_crop_height() // no action exists that could tune or write crop heights
+        => Assert.DoesNotContain(Enum.GetNames<Act>(), n => n.Contains("Crop", StringComparison.OrdinalIgnoreCase));
 
     [Fact]
     public void Quit_uncrops()

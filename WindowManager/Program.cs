@@ -25,7 +25,7 @@ static class Program
     static IntPtr msgWnd;
 
     const uint HoverIntervalMs = 700, AltSettleMs = 50, WatchdogMs = 30;
-    static readonly UIntPtr TimerHover = 1, TimerAltReleased = 2, TimerWatchdog = 3, TimerCropRetry = 4;
+    static readonly UIntPtr TimerHover = 1, TimerAltReleased = 2, TimerWatchdog = 3, TimerCropRetry = 4, TimerHighlight = 5;
     const uint CropRetryMs = 300; // Snap Layouts re-applies its position after the animation; retry after that
     static readonly HashSet<IntPtr> cropRetries = [];
     static IntPtr prevActive, lastHover;
@@ -39,7 +39,7 @@ static class Program
     static bool AltHeld => keys.Mods.HasFlag(Mod.Alt);
 
     // Window changes run off the keyboard hook callback (Windows drops hooks that take too long).
-    const uint WM_APP_TOGGLE_CHROME = 0x8001, WM_APP_TOGGLE_REVEAL = 0x8002, WM_APP_MOVED = 0x8004;
+    const uint WM_APP_TOGGLE_CHROME = 0x8001, WM_APP_TOGGLE_REVEAL = 0x8002, WM_APP_MOVED = 0x8004, WM_APP_MOVE_MONITOR = 0x8005, WM_APP_HIGHLIGHT = 0x8006;
     static readonly HashSet<IntPtr> movedWindows = []; // managed windows with a pending location change
     static readonly Dictionary<IntPtr, CropTracker> crops = [];  // self-drawn title bar windows
     static readonly Dictionary<IntPtr, uint> backdrops = [];     // original backdrop of windows we turned it off for
@@ -62,6 +62,7 @@ static class Program
 
         LoadCropOverrides();
         if (args.Contains("--dump")) { Dump(); return 0; }
+        if (args.Contains("--hotkeys")) { HelpWindow.ShowAndWait(); return 0; } // the list on its own, no hooks
 
         ReplaceRunningInstances();
         RecoverFromDeadInstance();
@@ -175,6 +176,8 @@ static class Program
                     case WM_APP_TOGGLE_CHROME: ToggleChrome(GetForegroundWindow()); break;
                     case WM_APP_TOGGLE_REVEAL: ToggleReveal(GetForegroundWindow()); break;
                     case WM_APP_MOVED: HandleMovedWindows(); break;
+                    case WM_APP_MOVE_MONITOR: MoveToMonitor(GetForegroundWindow(), (int)wParam); break;
+                    case WM_APP_HIGHLIGHT: Highlight(GetForegroundWindow()); break;
                 }
             }
             catch (Exception e) { Log.Info($"wndproc error msg=0x{msg:X}: {e}"); }
@@ -202,13 +205,13 @@ static class Program
             Log.Debug($"key vk=0x{k.vkCode:X2} {(down ? "down" : "up")}{(injected ? " injected" : "")}");
 
             if (down && !injected && k.vkCode is Vk.LAlt or Vk.RAlt && !AltHeld) GetCursorPos(out altDownPos);
-            var d = keys.Feed((int)k.vkCode, down, injected);
+            var d = keys.Feed((int)k.vkCode, down, injected, k.time);
             if (d.MaskFirst)
             {
                 var vk = (int)k.vkCode;
                 Inject(() => Send(KeyEngine.MaskedRelease(vk))); // the real release is swallowed below, re-sent after the mask
             }
-            if (d.Act != Act.None) Run(d.Act);
+            if (d.Act != Act.None) Run(d.Act, d.Arg);
             if (!down && !injected && k.vkCode is Vk.LAlt or Vk.RAlt) OnAltReleased();
             if (d.Suppress || d.MaskFirst) return 1;
         }
@@ -216,7 +219,7 @@ static class Program
         return CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
     }
 
-    static void Run(Act act)
+    static void Run(Act act, int arg = 0)
     {
         Log.Info($"action {act}");
         var held = keys.Held;
@@ -230,6 +233,15 @@ static class Program
                 break;
             case Act.ToggleReveal:
                 PostMessage(msgWnd, WM_APP_TOGGLE_REVEAL, IntPtr.Zero, IntPtr.Zero);
+                break;
+            case Act.MoveToMonitor:
+                PostMessage(msgWnd, WM_APP_MOVE_MONITOR, arg, IntPtr.Zero);
+                break;
+            case Act.HighlightWindow:
+                PostMessage(msgWnd, WM_APP_HIGHLIGHT, IntPtr.Zero, IntPtr.Zero);
+                break;
+            case Act.ShowHelp:
+                ShowHelp();
                 break;
             case Act.Close or Act.ToggleMaximize or Act.Minimize:
                 // Posted, like clicking the caption button; a hung app can't block the hook.
@@ -274,6 +286,7 @@ static class Program
         if (id == TimerHover) HoverFocus();
         else if (id == TimerWatchdog) { if (scroller.InGesture && !AltHeld) StopGesture("watchdog"); }
         else if (id == TimerAltReleased) { KillTimer(msgWnd, id); CenterAfterSwitch(); }
+        else if (id == TimerHighlight) { KillTimer(msgWnd, id); foreach (var b in borders) ShowWindow(b, SW_HIDE); }
         else if (id == TimerCropRetry)
         {
             KillTimer(msgWnd, id);
@@ -446,8 +459,12 @@ static class Program
             }
             return;
         }
-        var visible = IsZoomed(hwnd) ? null : Frames.FrameBounds(hwnd); // maximized: client already fills the monitor
-        ApplyStep(hwnd, tracker.OnLocation(window, Frames.ClientOnScreen(hwnd), CropPixels(hwnd), Frames.MonitorRect(hwnd).Top, visible), window);
+        var client = Frames.ClientOnScreen(hwnd);
+        var monitor = Frames.MonitorRect(hwnd);
+        // Maximized: the client fills the monitor except Chromium's auto-hide-taskbar sliver at the bottom.
+        // Otherwise: fill the rect Windows laid out (frame bounds).
+        var visible = IsZoomed(hwnd) ? Crop.MaximizedVisible(client, monitor) : Frames.FrameBounds(hwnd);
+        ApplyStep(hwnd, tracker.OnLocation(window, client, CropPixels(hwnd), monitor.Top, visible), window);
     }
 
     static void ApplyStep(IntPtr hwnd, CropStep step, Rect from)
@@ -534,6 +551,117 @@ static class Program
             Log.Info($"crop overrides: {string.Join(", ", cropOverrides.Select(kv => $"{kv.Key}={kv.Value}"))}");
         }
         catch (Exception e) when (e is IOException or JsonException) { Log.Info($"crop.json unreadable, using defaults: {e.Message}"); }
+    }
+
+    // ---- triple Alt: flash a border around the active window ----
+
+    const uint HighlightMs = 1200;
+    static readonly IntPtr[] borders = new IntPtr[4]; // top, bottom, left, right strips
+    static WndProc? borderProc;
+    static IntPtr borderBrush;
+
+    // Our own strips rather than the DWM border: cropped windows have DWM frame drawing off and a clip, so Windows'
+    // border can't show on them. Click-through (layered + transparent), topmost, never activated.
+    static void Highlight(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero || !GetWindowRect(hwnd, out var w)) return;
+        var area = GetWindowRgnBox(hwnd, out var g) != 0
+            ? new Rect(w.Left + g.Left, w.Top + g.Top, w.Left + g.Right, w.Top + g.Bottom)
+            : Frames.FrameBounds(hwnd) ?? w;
+        var t = Math.Max(2, (int)(4 * GetDpiForWindow(hwnd) / 96)); // 4px at 100%
+
+        // Windows accent colour (what themed borders and highlights use); ARGB -> COLORREF (0x00BBGGRR)
+        var color = DwmGetColorizationColor(out var argb, out _) == 0
+            ? ((argb >> 16) & 0xFF) | (argb & 0xFF00) | ((argb & 0xFF) << 16)
+            : 0x00D77800u;
+        if (borderBrush != IntPtr.Zero) DeleteObject(borderBrush);
+        borderBrush = CreateSolidBrush(color);
+
+        if (borders[0] == IntPtr.Zero && !CreateBorders()) return;
+        Rect[] strips =
+        [
+            new(area.Left, area.Top, area.Right, area.Top + t),
+            new(area.Left, area.Bottom - t, area.Right, area.Bottom),
+            new(area.Left, area.Top, area.Left + t, area.Bottom),
+            new(area.Right - t, area.Top, area.Right, area.Bottom),
+        ];
+        for (var i = 0; i < 4; i++)
+        {
+            SetWindowPos(borders[i], HWND_TOPMOST, strips[i].Left, strips[i].Top, strips[i].Width, strips[i].Height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            InvalidateRect(borders[i], IntPtr.Zero, true);
+        }
+        StartTimer(TimerHighlight, HighlightMs);
+        Log.Info($"highlight {Describe(hwnd)} {area}");
+    }
+
+    static bool CreateBorders()
+    {
+        const string cls = "WindowManagerBorder";
+        borderProc = (h, msg, wParam, lParam) =>
+        {
+            if (msg != WM_ERASEBKGND) return DefWindowProc(h, msg, wParam, lParam);
+            GetClientRect(h, out var r);
+            FillRect(wParam, ref r, borderBrush);
+            return 1;
+        };
+        var wc = new WNDCLASSEX { cbSize = (uint)Marshal.SizeOf<WNDCLASSEX>(), lpfnWndProc = borderProc, hInstance = GetModuleHandle(null), lpszClassName = cls };
+        if (RegisterClassEx(ref wc) == 0) { Log.Win32("RegisterClassEx(border)"); return false; }
+        for (var i = 0; i < 4; i++)
+        {
+            borders[i] = CreateWindowEx(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW_EX | WS_EX_NOACTIVATE,
+                cls, null, WS_POPUP_STYLE, 0, 0, 0, 0, IntPtr.Zero, IntPtr.Zero, wc.hInstance, IntPtr.Zero);
+            if (borders[i] == IntPtr.Zero) { Log.Win32("CreateWindowEx(border)"); return false; }
+            SetLayeredWindowAttributes(borders[i], 0, 255, LWA_ALPHA); // layered + transparent = click-through
+        }
+        return true;
+    }
+
+    // ---- both Alts: list every hotkey ----
+
+    // Runs on its own UI thread, so it never blocks the hook thread.
+    static void ShowHelp() => Log.Info(HelpWindow.Toggle(GetForegroundWindow()) ? "hotkey list opened" : "hotkey list closed");
+
+    // ---- move between monitors (Copilot key + 1-9) ----
+
+    static void MoveToMonitor(IntPtr hwnd, int number)
+    {
+        var monitors = Frames.AllMonitors();
+        var target = monitors.FirstOrDefault(m => Monitors.Number(m.Device) == number);
+        var current = Frames.MonitorOf(hwnd);
+        if (target is null || current is null)
+        {
+            Log.Info($"move to monitor {number}: no such monitor (have {string.Join(", ", monitors.Select(m => Monitors.Number(m.Device)))})");
+            return;
+        }
+        if (target.Handle == current.Handle) return;
+
+        var wp = new WINDOWPLACEMENT { length = Marshal.SizeOf<WINDOWPLACEMENT>() };
+        if (!GetWindowPlacement(hwnd, ref wp)) { Log.Win32("GetWindowPlacement"); return; }
+        var zoomed = IsZoomed(hwnd);
+        // rcNormal is in workspace coordinates: relative to the primary monitor's work area.
+        var origin = monitors.FirstOrDefault(m => m.Primary)?.Work ?? default;
+        Rect ToScreen(Rect r) => new(r.Left + origin.Left, r.Top + origin.Top, r.Right + origin.Left, r.Bottom + origin.Top);
+        Rect ToWorkspace(Rect r) => new(r.Left - origin.Left, r.Top - origin.Top, r.Right - origin.Left, r.Bottom - origin.Top);
+
+        // Maximized: keep its restore rect. Otherwise move what is on screen (a snapped window's restore rect is its
+        // pre-snap size). Either way, start from Windows' rect, not our stretched crop rect.
+        GetWindowRect(hwnd, out var onScreen);
+        var rect = zoomed ? ToScreen(wp.rcNormal) : onScreen;
+        if (crops.TryGetValue(hwnd, out var tracker) && tracker.SlotFor(rect) is { } slot) rect = slot;
+
+        var mapped = Monitors.Map(rect, current.Work, target.Work);
+        wp.rcNormal = ToWorkspace(mapped);
+        // Always place it normal on the target first: Windows ignores a new restore rect for a window that is already
+        // maximized (measured: it stayed on its monitor). Maximize again once it is there.
+        wp.showCmd = SW_SHOWNORMAL;
+        wp.flags = 0;
+        Frames.SetRegion(hwnd, null); // the old clip is for the old geometry; the crop is redone at the new place
+        if (!SetWindowPlacement(hwnd, ref wp)) { Log.Win32("SetWindowPlacement"); return; }
+        // Landing on a monitor with another DPI makes the app rescale itself (measured: 1944 wide became 1308);
+        // now that it is on the target monitor, set the intended rect again.
+        SetWindowPos(hwnd, IntPtr.Zero, mapped.Left, mapped.Top, mapped.Width, mapped.Height, SWP_NOZORDER | SWP_NOACTIVATE);
+        if (zoomed) ShowWindow(hwnd, SW_MAXIMIZE);
+        Log.Info($"move {Describe(hwnd)} to monitor {number} ({target.Device}){(zoomed ? " maximized" : "")}: {rect} -> {mapped}");
     }
 
     // ---- shared ----

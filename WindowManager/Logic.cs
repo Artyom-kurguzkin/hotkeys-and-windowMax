@@ -9,6 +9,7 @@ public static class Vk
     public const int Ins = 0x2D, Del = 0x2E, LWin = 0x5B, RWin = 0x5C, Apps = 0x5D;
     public const int LShift = 0xA0, RShift = 0xA1, LCtrl = 0xA2, RCtrl = 0xA3, LAlt = 0xA4, RAlt = 0xA5;
     public const int OemOpen = 0xDB, OemClose = 0xDD; // [ and ]
+    public const int F23 = 0x86; // the Copilot key sends LWin + LShift + F23 (measured; repeats the triple while held)
     public const int Mask = 0xE8; // unassigned; the "menu mask" key
 
     public static bool IsModifier(int vk) => vk is LShift or RShift or LCtrl or RCtrl or LAlt or RAlt or LWin or RWin or Shift or Ctrl or Alt;
@@ -24,12 +25,12 @@ public enum Act
     None, AppsKey, Click, Esc, End, Home, ShiftEnd, ShiftHome, NewLineBelow, DesktopLeft, DesktopRight,
     WheelDown, WheelUp, WheelLeft, WheelRight, Quit,
     Close, ToggleMaximize, Minimize, ToggleChrome,
-    ToggleReveal, SnapLayouts,
+    ToggleReveal, SnapLayouts, MoveToMonitor, HighlightWindow, ShowHelp,
 }
 
 public readonly record struct KeyStroke(int Vk, bool Up);
 
-public readonly record struct Decision(bool Suppress, Act Act = Act.None, bool MaskFirst = false)
+public readonly record struct Decision(bool Suppress, Act Act = Act.None, bool MaskFirst = false, int Arg = 0)
 {
     public static readonly Decision Pass = new(false);
 }
@@ -61,7 +62,39 @@ public sealed class KeyEngine
         new(Mod.Alt, 'Q', Act.Close),
         new(Mod.Alt, 'M', Act.ToggleMaximize),
         new(Mod.Alt, 'N', Act.Minimize),
-        new(Mod.Alt, 'T', Act.ToggleChrome),    ];
+        new(Mod.Alt, 'T', Act.ToggleChrome),
+        new(Mod.Win | Mod.Alt, 'X', Act.Close), // same as Alt+F4
+    ];
+
+    // Shown by pressing both Alt keys, grouped in this category order and sorted by shortcut within each group.
+    // Keep in step with the bindings above (a test checks each binding is listed).
+    public static readonly string[] HelpCategories = ["Windows", "Monitors & tiling", "Scrolling", "Text editing", "Program"];
+    public static readonly (string Category, string Keys, string What)[] Help =
+    [
+        ("Windows", "Alt+Q  or  Win+Alt+X", "Close the active window (like Alt+F4)"),
+        ("Windows", "Alt+M", "Maximize / restore the active window"),
+        ("Windows", "Alt+N", "Minimize the active window"),
+        ("Windows", "Alt+T", "Show / hide the active window's title bar"),
+        ("Windows", "Win+Alt  (tap)", "Show / hide the active window's cropped tab strip"),
+        ("Windows", "Alt, Alt, Alt  (quickly)", "Flash a border around the active window"),
+        ("Monitors & tiling", "Ctrl+Win+Alt  (tap)", "Snap Layouts: tile the active window"),
+        ("Monitors & tiling", "Copilot+1…9  or  Win+Alt+1…9", "Move the active window to monitor 1…9"),
+        ("Monitors & tiling", "PageUp / PageDown", "Previous / next virtual desktop"),
+        ("Scrolling", "Alt + TrackPoint", "Scroll in any direction"),
+        ("Scrolling", "Alt+H / J / K / L", "Scroll left / down / up / right"),
+        ("Text editing", "Alt+[  /  Alt+]", "Home / End  (add Shift to select)"),
+        ("Text editing", "Alt+O", "New line below"),
+        ("Text editing", "Alt+Z  /  Alt+C", "Context menu / left click"),
+        ("Text editing", "Left Alt+X", "Escape"),
+        ("Program", "Both Alt keys", "Show this list"),
+        ("Program", "Ctrl+Alt+Shift+Q", "Quit and restore all windows"),
+    ];
+
+    // Grouped (in HelpCategories order) and sorted by shortcut inside each group.
+    public static IEnumerable<(string Category, string Keys, string What)> SortedHelp() =>
+        Help.OrderBy(h => Array.IndexOf(HelpCategories, h.Category)).ThenBy(h => h.Keys, StringComparer.OrdinalIgnoreCase);
+
+    public const uint AltTapWindowMs = 400; // max time between taps of a triple Alt tap
 
     // Modifier-only taps: hold exactly these modifiers, release one, no other key in between.
     public static Act TapAct(Mod mods) => mods switch
@@ -72,6 +105,11 @@ public sealed class KeyEngine
     };
 
     Act tapArmed; // the tap held right now (None = not a tap); releasing one of its keys fires it
+    bool copilotHeld; // F23 down: the Copilot key is held, 1-9 move the active window to that monitor
+    int loneAlt;          // the Alt key pressed with nothing else held and nothing pressed since (0 = none)
+    int altTaps;          // consecutive lone Alt taps, each within AltTapWindowMs of the previous
+    uint lastAltTap;
+    bool bothAltsFired;   // both Alts held and the help already shown for this press
     readonly HashSet<int> held = [];
     readonly HashSet<int> dirty = [];      // Alt/Win keys held while a shortcut fired: their release must be masked
     readonly HashSet<int> suppressed = []; // non-modifier keys whose key-down we swallowed: swallow the key-up too
@@ -102,20 +140,66 @@ public sealed class KeyEngine
         return m;
     }
 
-    public Decision Feed(int vk, bool down, bool injected)
+    // time: the event's millisecond timestamp (KBDLLHOOKSTRUCT.time), used for the triple Alt tap.
+    public Decision Feed(int vk, bool down, bool injected, uint time = 0)
     {
         if (injected) return Decision.Pass;
         lock (gate)
         {
+            if (down)
+            {
+                // A lone Alt: pressed with nothing else held (or its own auto-repeat). Any other key cancels it.
+                var onlyThisAlt = held.Count == 0 || (held.Count == 1 && held.Contains(vk));
+                loneAlt = vk is Vk.LAlt or Vk.RAlt && onlyThisAlt ? vk : 0;
+            }
+            if (vk == Vk.F23)
+            {
+                // Copilot key: swallowed so Copilot doesn't launch. Its built-in Win press is marked dirty, so the
+                // Win release gets masked and the Start menu doesn't open either.
+                copilotHeld = down;
+                tapArmed = Act.None;
+                foreach (var h in held) if (Vk.IsAltOrWin(h)) dirty.Add(h);
+                return new Decision(true);
+            }
+            if (copilotHeld && down && vk is >= '1' and <= '9')
+            {
+                suppressed.Add(vk);
+                return new Decision(true, Act.MoveToMonitor, Arg: vk - '0');
+            }
             if (Vk.IsModifier(vk))
             {
                 if (down)
                 {
                     held.Add(vk);
+                    if (held.Contains(Vk.LAlt) && held.Contains(Vk.RAlt))
+                    {
+                        // Both Alt keys: show the hotkey list once per press; mask both releases.
+                        tapArmed = Act.None;
+                        dirty.Add(Vk.LAlt);
+                        dirty.Add(Vk.RAlt);
+                        if (bothAltsFired) return Decision.Pass; // auto-repeat
+                        bothAltsFired = true;
+                        return new Decision(false, Act.ShowHelp);
+                    }
                     // Pressing more modifiers moves to a bigger tap (Win+Alt -> Ctrl+Win+Alt); anything else disarms.
                     tapArmed = TapAct(ModsOf(held));
                     return Decision.Pass;
                 }
+                if (vk is Vk.LWin or Vk.RWin) copilotHeld = false; // backstop if the F23 release was ever missed
+                if (vk is Vk.LAlt or Vk.RAlt) bothAltsFired = false;
+                if (vk == loneAlt && !dirty.Contains(vk))
+                {
+                    // A clean Alt tap. Three within AltTapWindowMs of each other flash the active window's border;
+                    // the third is masked so the apps' menu-bar toggling ends where it started.
+                    loneAlt = 0;
+                    held.Remove(vk);
+                    altTaps = altTaps > 0 && time - lastAltTap <= AltTapWindowMs ? altTaps + 1 : 1;
+                    lastAltTap = time;
+                    if (altTaps < 3) return Decision.Pass;
+                    altTaps = 0;
+                    return new Decision(false, Act.HighlightWindow, MaskFirst: true);
+                }
+                if (vk is Vk.LAlt or Vk.RAlt) altTaps = 0; // an Alt used in a chord breaks the sequence
                 if (tapArmed != Act.None)
                 {
                     // Tap: mask this release (no Start/menu bar) and the other held Alt/Win keys' later releases.
@@ -134,6 +218,16 @@ public sealed class KeyEngine
         }
 
         var mods = Mods;
+        if (mods == (Mod.Win | Mod.Alt) && vk is >= '1' and <= '9')
+        {
+            // Win+Alt+1-9: the same move for keyboards without a Copilot key (Fn never reaches Windows).
+            lock (gate)
+            {
+                suppressed.Add(vk);
+                foreach (var h in held) if (Vk.IsAltOrWin(h)) dirty.Add(h);
+            }
+            return new Decision(true, Act.MoveToMonitor, Arg: vk - '0');
+        }
         foreach (var b in Bindings)
         {
             if (b.Vk != vk || b.Mods != mods) continue;
@@ -326,6 +420,27 @@ public static class Chrome
     };
 }
 
+public static class Monitors
+{
+    // Windows' display number from the device name: "\\.\DISPLAY3" -> 3 (what Settings > Display shows).
+    public static int? Number(string device)
+    {
+        var digits = new string(device.Reverse().TakeWhile(char.IsDigit).Reverse().ToArray());
+        return int.TryParse(digits, out var n) ? n : null;
+    }
+
+    // Same relative position and size in the target work area, kept inside it.
+    public static Rect Map(Rect r, Rect from, Rect to)
+    {
+        double sx = (double)to.Width / from.Width, sy = (double)to.Height / from.Height;
+        var w = Math.Min((int)Math.Round(r.Width * sx), to.Width);
+        var h = Math.Min((int)Math.Round(r.Height * sy), to.Height);
+        var l = Math.Clamp(to.Left + (int)Math.Round((r.Left - from.Left) * sx), to.Left, to.Right - w);
+        var t = Math.Clamp(to.Top + (int)Math.Round((r.Top - from.Top) * sy), to.Top, to.Bottom - h);
+        return new Rect(l, t, l + w, t + h);
+    }
+}
+
 // Cropping the title bar / tab strip that apps draw inside their own client area.
 public static class Crop
 {
@@ -362,6 +477,16 @@ public static class Crop
         (new Rect(visible.Left - (client.Left - window.Left), window.Top,
                   visible.Right + (window.Right - client.Right), visible.Bottom + (window.Bottom - client.Bottom)),
          new Rect(visible.Left, client.Top, visible.Right, visible.Bottom));
+
+    // Maximized Chromium/Electron windows stop their content 1-2px above the monitor bottom when the taskbar
+    // auto-hides (measured: VS Code and Discord client bottom 1198 on a 1200px panel), which shows a sliver of
+    // wallpaper. Returns the rect to fill (content down to the monitor bottom), or null when there's no such gap.
+    public const int MaxBottomGap = 4;
+    public static Rect? MaximizedVisible(Rect client, Rect monitor)
+    {
+        var gap = monitor.Bottom - client.Bottom;
+        return gap is > 0 and <= MaxBottomGap ? client with { Bottom = monitor.Bottom } : null;
+    }
 
     public static int VisibleBar(int n, Rect slotClient, int monitorTop) =>
         Math.Max(0, n - Math.Max(0, monitorTop - slotClient.Top));
@@ -459,6 +584,10 @@ public sealed class CropTracker
         awaitingRetry = false; // a new attempt (new slot or a retry) may be refused again
         return Remember(target, window, client, region);
     }
+
+    // The slot behind one of our cropped rects (e.g. a cropped window's restore rect), so moving it elsewhere
+    // starts from where Windows had it rather than from the stretched rect.
+    public Rect? SlotFor(Rect r) => history.FindLastIndex(h => h.Target == r) is var i and >= 0 ? history[i].Slot : null;
 
     // Allow the refused crop to be attempted again (after Windows' snap animation has settled).
     public void Retry() { lastAttempt = null; awaitingRetry = false; }

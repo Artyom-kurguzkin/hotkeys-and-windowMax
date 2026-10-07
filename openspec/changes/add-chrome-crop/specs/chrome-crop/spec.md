@@ -32,6 +32,10 @@ The system SHALL stretch each window with a self-drawn title bar upward by its c
 - **WHEN** Windows moves the window back to a rect that the system had already produced by cropping
 - **THEN** only the clip is refreshed and the window is not extended again
 
+#### Scenario: Maximized window content reaches the monitor bottom
+- **WHEN** a maximized cropped window's content stops up to 4 px above the monitor bottom (Chromium's sliver for an auto-hide taskbar)
+- **THEN** the window is stretched down so its content reaches the monitor bottom and no wallpaper shows
+
 #### Scenario: Snapped window content fills the snap area
 - **WHEN** a cropped window is snapped (for example with Win+Left) or otherwise placed while not maximized
 - **THEN** its visible content meets the edges of the area Windows gave it, with no gap at the sides or bottom
