@@ -33,9 +33,15 @@ This is a new C# project next to `binds.ahk`. The AHK script relies on AutoHotke
 - **Mark modifiers dirty.** When a shortcut fires, any held Alt or Win becomes dirty, and its later physical release gets `MaskFirst`. This is needed because Windows sees the injected re-press followed by the physical release as a lone Alt tap, which opens the menu bar.
 - **Run wheel scrolling on a worker task.** The 10 ms gaps would otherwise block the hook thread. `SendInput` is safe to call from any thread.
 - **Enforce a single instance through a message-only window** of class `WindowManagerMsg`.
-  - A new instance finds that window, posts `WM_CLOSE` to it, and waits up to 3 s for the old process to exit.
-  - The old instance therefore runs its normal shutdown path. In a later change, that path restores window styles.
+  - A new instance enumerates every window of that class, posts `WM_CLOSE` to each, and waits up to 3 s per process.
+  - An instance that exits this way runs its normal shutdown path, which restores window styles and crops.
+  - An instance that doesn't exit in time is terminated with `Process.Kill`.
   - The same window becomes the Raw Input target in a later change.
+- **Recover from a terminated or crashed instance.** A killed process can't restore anything, so every instance writes `state.json` before changing a window and again on each crop or uncrop. The file lists hwnd, original style and crop slot. A new instance runs `State.Recover` on any leftover file: it drops the clip, moves the window back to its slot and restores the caption. Then it starts managing. A clean shutdown deletes the file.
+- **Inject all input from one sender thread.** `SendInput` must never be called from the hook thread.
+  - The bug: `SendInput` waits while Windows delivers the injected events, and Windows calls our low-level hooks on the hook thread during that wait. A second `SendInput` from inside that nested hook call never returns. This was measured on a frozen instance whose stack was `OnRawInput → SendInput → KeyboardHook → Run(Click) → SendInput`. It froze for good, ignored `WM_CLOSE`, and still couldn't be terminated cleanly. Windows left it as a zombie holding a lock on the exe.
+  - The fix: hooks and handlers enqueue send actions on a `BlockingCollection`, drained by one background thread, so ordering is kept.
+  - A masked modifier release is now handled by swallowing the physical key-up and enqueueing `KeyEngine.MaskedRelease(vk)` (mask down, mask up, key-up), so the mask still lands first.
 - **Logging** uses a static `Log` class with no package. It opens the file, appends one line and closes it again for every line, sharing the file with other processes. A long-lived writer was tried first: while a replacing instance and the old one both ran, they overwrote each other's lines, because each process kept its own file position. `Log.Win32(what)` records `Marshal.GetLastWin32Error()`.
 
 ## Risks / Trade-offs
@@ -43,3 +49,5 @@ This is a new C# project next to `binds.ahk`. The AHK script relies on AutoHotke
 - [Windows silently removes the hook if the callback runs longer than `LowLevelHooksTimeout`] → The callback only does a table lookup and a `SendInput` call. Slow work goes to a worker.
 - [The hook can't see keys while an elevated window has focus (UIPI)] → Documented. Run the program elevated through a scheduled task if this matters.
 - [Running alongside binds.ahk fires every bind twice] → Stop the AHK script before starting the program.
+- [A process stuck in a kernel input wait can't finish terminating; it remains a thread-less zombie until reboot and keeps its exe file locked] → The takeover skips processes that no longer exist. To republish over a locked exe, rename it first, since Windows allows renaming a running image.
+- [state.json is rewritten on every crop step] → It is small. `ponytail:` debounce it if it ever shows up in profiles.

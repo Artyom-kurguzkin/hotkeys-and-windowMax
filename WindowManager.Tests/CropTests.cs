@@ -78,6 +78,24 @@ public class ChromeCropTests
         Assert.Equal(floatCrop.Region, back.Region);
     }
 
+    // Measured on Vivaldi: while its width was dragged, every step reported our cropped top with a clamped height,
+    // and each was cropped again from there (top -60 -> -120), leaving a gap at the bottom of the screen.
+    [Fact]
+    public void Sideways_resize_keeps_the_vertical_slot()
+    {
+        var t = new CropTracker();
+        var slot = new Rect(-8, 0, 1167, 1200);
+        var first = t.OnLocation(slot, new Rect(2, 0, 1157, 1190), 60);
+        Assert.Equal(-60, first.Target.Top);
+
+        // Windows reports the resized window at our top (-60) but clamped to 1226 high
+        var resized = t.OnLocation(new Rect(-8, -60, 1179, 1166), new Rect(2, -60, 1169, 1156), 60);
+
+        Assert.Equal(CropKind.Apply, resized.Kind);
+        Assert.Equal(new Rect(-8, -60, 1179, 1200), resized.Target); // same top, full height back, new width
+        Assert.Equal(new Rect(-8, 0, 1179, 1200), t.Slot);           // slot widened, not moved up
+    }
+
     [Fact]
     public void Refused_crop_is_not_retried()
     {

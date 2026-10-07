@@ -141,6 +141,10 @@ public sealed class KeyEngine
         return Decision.Pass;
     }
 
+    // A masked modifier release: the real key-up is swallowed and re-injected after the mask key, so the mask is
+    // guaranteed to land first even though injection happens later on the sender thread.
+    public static KeyStroke[] MaskedRelease(int vk) => [.. Tap(Vk.Mask), new KeyStroke(vk, true)];
+
     // Keystrokes emitted for keyboard-output actions; empty for actions handled elsewhere (click, wheel, quit).
     public static KeyStroke[] Output(Act act) => act switch
     {
@@ -369,6 +373,7 @@ public sealed class CropTracker
     (Rect Window, Rect Target)? lastAttempt;
 
     public Rect? Applied { get; private set; } // the rect we last put the window at (or recognised as ours)
+    public Rect? Slot => Current()?.Slot;      // where Windows had put it before we cropped (null = not cropped)
 
     public CropStep OnLocation(Rect window, Rect client, int n)
     {
@@ -381,6 +386,15 @@ public sealed class CropTracker
         {
             Applied = window;
             return new CropStep(CropKind.RegionOnly, window, history[i].Region);
+        }
+
+        // Still at our cropped top: the window was resized sideways (e.g. dragging its edge or a snap divider) while
+        // our crop stayed in effect, and Windows' size clamp may have cut the stretched height. It is not a new slot:
+        // keep the slot's vertical extent and take only the new horizontal one. Treating it as a slot crops twice.
+        if (Applied is { } a && window.Top == a.Top && Current() is { } c)
+        {
+            window = window with { Top = c.Slot.Top, Bottom = c.Slot.Bottom };
+            client = client with { Top = c.SlotClient.Top, Bottom = c.SlotClient.Bottom };
         }
 
         var (target, region) = Crop.Plan(window, client, n);

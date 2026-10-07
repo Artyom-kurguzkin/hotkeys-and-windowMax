@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -12,6 +13,13 @@ static class Program
     const int ScrollSteps = 3, ScrollDelayMs = 10;
 
     static readonly KeyEngine keys = new();
+
+    // All SendInput calls run here, never on the hook thread. SendInput waits while Windows delivers the injected
+    // events, and Windows calls our low-level hooks on the hook thread during that wait; a second SendInput from
+    // inside that nested hook call never returns (measured: a frozen instance's stack was
+    // OnRawInput → SendInput → KeyboardHook → SendInput). One queue keeps injected input in order.
+    static readonly BlockingCollection<Action> outbox = [];
+    static void Inject(Action send) => outbox.Add(send);
     static HookProc? keyboardProc; // kept in a field so the GC can't collect the delegate native code holds
     static WndProc? wndProc;
     static IntPtr msgWnd;
@@ -51,7 +59,13 @@ static class Program
         LoadCropOverrides();
         if (args.Contains("--dump")) { Dump(); return 0; }
 
-        ReplaceRunningInstance();
+        ReplaceRunningInstances();
+        RecoverFromDeadInstance();
+        new Thread(() =>
+        {
+            foreach (var send in outbox.GetConsumingEnumerable())
+                try { send(); } catch (Exception e) { Log.Info($"input sender error: {e}"); }
+        }) { IsBackground = true, Name = "input-sender" }.Start();
         msgWnd = CreateMessageWindow();
         if (msgWnd == IntPtr.Zero) return 1;
 
@@ -84,27 +98,56 @@ static class Program
 
         UnhookWinEvent(showHook);
         UnhookWinEvent(moveHook);
-        RestoreAll();
         UnhookWindowsHookEx(hook);
         if (mouseHook != IntPtr.Zero) UnhookWindowsHookEx(mouseHook);
+        RestoreAll();
+        State.Delete(State.DefaultPath); // clean exit: nothing left for a successor to undo
         Log.Info("shutdown");
         return 0;
     }
 
-    // #SingleInstance Force: ask the old instance to close (so it runs its shutdown path) and wait for it.
-    static void ReplaceRunningInstance()
+    // #SingleInstance Force for every running instance: ask each to close so it restores its windows; any that
+    // doesn't exit in time (frozen, or an old build) is terminated, and RecoverFromDeadInstance undoes its changes.
+    static void ReplaceRunningInstances()
     {
-        var old = FindWindowEx(HWND_MESSAGE, IntPtr.Zero, MsgClass, null);
-        if (old == IntPtr.Zero) return;
-        GetWindowThreadProcessId(old, out var pid);
-        Log.Info($"replacing running instance pid={pid}");
-        PostMessage(old, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
-        try
+        var pids = new HashSet<uint>();
+        for (var w = FindWindowEx(HWND_MESSAGE, IntPtr.Zero, MsgClass, null); w != IntPtr.Zero; w = FindWindowEx(HWND_MESSAGE, w, MsgClass, null))
         {
-            if (!Process.GetProcessById((int)pid).WaitForExit(3000)) Log.Info($"old instance pid={pid} did not exit in 3s");
+            GetWindowThreadProcessId(w, out var pid);
+            if (pid == Environment.ProcessId) continue;
+            pids.Add(pid);
+            Log.Info($"replacing running instance pid={pid}");
+            if (!PostMessage(w, WM_CLOSE, IntPtr.Zero, IntPtr.Zero)) Log.Win32($"PostMessage(WM_CLOSE) pid={pid}");
         }
-        catch (ArgumentException) { } // already gone
+        foreach (var pid in pids)
+        {
+            try
+            {
+                using var p = Process.GetProcessById((int)pid);
+                if (p.WaitForExit(3000)) continue;
+                Log.Info($"old instance pid={pid} did not exit in 3s: terminating it");
+                p.Kill();
+                if (!p.WaitForExit(3000)) Log.Info($"old instance pid={pid} still running after Kill");
+            }
+            catch (ArgumentException) { } // already gone
+            catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                Log.Info($"could not terminate pid={pid}: {e.Message}");
+            }
+        }
     }
+
+    static void RecoverFromDeadInstance()
+    {
+        var left = State.Load(State.DefaultPath);
+        if (left.Length == 0) return;
+        Log.Info($"recovered {State.Recover(left)} windows left modified by a terminated/crashed instance");
+        State.Delete(State.DefaultPath);
+    }
+
+    static void SaveState() => State.Save(State.DefaultPath,
+        managed.Select(kv => new State.Entry(kv.Key, kv.Value,
+            crops.TryGetValue(kv.Key, out var t) && t.Slot is { } s ? State.ToArray(s) : null)));
 
     static IntPtr CreateMessageWindow()
     {
@@ -148,10 +191,14 @@ static class Program
 
             if (down && !injected && k.vkCode is Vk.LAlt or Vk.RAlt && !AltHeld) GetCursorPos(out altDownPos);
             var d = keys.Feed((int)k.vkCode, down, injected);
-            if (d.MaskFirst) Send(KeyEngine.Tap(Vk.Mask));
+            if (d.MaskFirst)
+            {
+                var vk = (int)k.vkCode;
+                Inject(() => Send(KeyEngine.MaskedRelease(vk))); // the real release is swallowed below, re-sent after the mask
+            }
             if (d.Act != Act.None) Run(d.Act);
             if (!down && !injected && k.vkCode is Vk.LAlt or Vk.RAlt) OnAltReleased();
-            if (d.Suppress) return 1;
+            if (d.Suppress || d.MaskFirst) return 1;
         }
         catch (Exception e) { Log.Info($"keyboard hook error: {e}"); }
         return CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
@@ -183,8 +230,7 @@ static class Program
                 if (!PostMessage(fg, WM_SYSCOMMAND, (IntPtr)cmd, IntPtr.Zero)) Log.Win32("PostMessage(WM_SYSCOMMAND)");
                 break;
             case Act.WheelDown or Act.WheelUp or Act.WheelLeft or Act.WheelRight:
-                // Off the hook thread: the gaps between steps would otherwise stall all keyboard input.
-                Task.Run(() =>
+                Inject(() =>
                 {
                     Send(KeyEngine.Lift(held));
                     for (var i = 0; i < ScrollSteps; i++)
@@ -196,12 +242,15 @@ static class Program
                 });
                 break;
             case Act.Click:
-                Send(KeyEngine.Lift(held));
-                SendMouse(MouseInput(MOUSEEVENTF_LEFTDOWN), MouseInput(MOUSEEVENTF_LEFTUP));
-                Send(KeyEngine.Restore(held, keys.Held));
+                Inject(() =>
+                {
+                    Send(KeyEngine.Lift(held));
+                    SendMouse(MouseInput(MOUSEEVENTF_LEFTDOWN), MouseInput(MOUSEEVENTF_LEFTUP));
+                    Send(KeyEngine.Restore(held, keys.Held));
+                });
                 break;
             default:
-                Send([.. KeyEngine.Lift(held), .. KeyEngine.Output(act), .. KeyEngine.Restore(held, keys.Held)]);
+                Inject(() => Send([.. KeyEngine.Lift(held), .. KeyEngine.Output(act), .. KeyEngine.Restore(held, keys.Held)]));
                 break;
         }
     }
@@ -292,6 +341,7 @@ static class Program
         // re-entrantly during that wait, so they must already see the final classification.
         managed[hwnd] = style;
         if (selfDrawn) crops[hwnd] = new CropTracker();
+        SaveState(); // before touching the window, so a successor can undo it even if we die mid-way
         Frames.Strip(hwnd);
         Log.Info($"strip {Describe(hwnd)} class={cls} style=0x{style:X8} -> 0x{Frames.Style(hwnd):X8}" +
                  (selfDrawn ? $" self-drawn crop={Crop.DipFor(ProcessName(hwnd), cropOverrides)}dip@{dpi}" : ""));
@@ -308,7 +358,8 @@ static class Program
             {
                 case EVENT_OBJECT_SHOW: Manage(hwnd); break;
                 case EVENT_OBJECT_DESTROY:
-                    managed.Remove(hwnd); userShown.Remove(hwnd); coverAttempts.Remove(hwnd); crops.Remove(hwnd); names.Remove(hwnd);
+                    userShown.Remove(hwnd); coverAttempts.Remove(hwnd); crops.Remove(hwnd); names.Remove(hwnd);
+                    if (managed.Remove(hwnd)) SaveState();
                     break;
                 case EVENT_OBJECT_LOCATIONCHANGE when !managed.ContainsKey(hwnd):
                     if (Focus.IsRealWindow(Frames.Style(hwnd)) || Frames.ClassName(hwnd) == Chrome.UwpFrameClass) Manage(hwnd); // e.g. restored from minimized
@@ -355,6 +406,7 @@ static class Program
             if (tracker.Applied is not null)
             {
                 tracker.Uncrop(); // the app moved itself to fullscreen: just drop the clip, don't move it
+                SaveState();
                 Frames.SetRegion(hwnd, null);
                 Log.Info($"uncrop {Describe(hwnd)}: app went fullscreen");
             }
@@ -365,6 +417,8 @@ static class Program
 
     static void ApplyStep(IntPtr hwnd, CropStep step, Rect from)
     {
+        // ponytail: rewrites state.json on every crop (a few per window move); debounce if it ever shows up in profiles
+        if (step.Kind != CropKind.None) SaveState();
         switch (step.Kind)
         {
             case CropKind.Apply:
@@ -383,6 +437,7 @@ static class Program
     {
         if (!crops.TryGetValue(hwnd, out var tracker)) return;
         if (tracker.Uncrop() is not { } slot) return; // never cropped (e.g. app fullscreen)
+        SaveState();
         Frames.SetRegion(hwnd, null);
         Frames.MoveUnclamped(hwnd, slot);
         Log.Info($"uncrop {Describe(hwnd)} -> {slot}");
@@ -551,7 +606,8 @@ static class Program
             // Lift Alt once for the whole gesture so apps see plain wheel, not Alt+wheel (VS Code fast-scroll etc.).
             // Not re-pressed: the gesture only ends on the physical Alt release, which is masked.
             keys.MarkChordUsed();
-            Send(KeyEngine.Lift(keys.Held));
+            var held = keys.Held;
+            Inject(() => Send(KeyEngine.Lift(held)));
             Log.Info($"trackpoint gesture start at {altDownPos.X},{altDownPos.Y}");
         }
         if (x == 0 && y == 0) return;
@@ -559,7 +615,7 @@ static class Program
         Log.Debug($"trackpoint dx={m.Dx} dy={m.Dy} -> wheel x={x} y={y} lag={Environment.TickCount - GetMessageTime()}ms");
         INPUT[] wheel = [.. (y != 0 ? [MouseInput(MOUSEEVENTF_WHEEL, -y)] : Array.Empty<INPUT>()),
                          .. (x != 0 ? [MouseInput(MOUSEEVENTF_HWHEEL, x)] : Array.Empty<INPUT>())];
-        SendMouse(wheel);
+        Inject(() => SendMouse(wheel));
     }
 
     // Swallows real cursor movement while a TrackPoint gesture runs, so the cursor never moves (no snap-back jitter).

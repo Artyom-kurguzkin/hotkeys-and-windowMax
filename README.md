@@ -13,7 +13,7 @@ dotnet publish WindowManager -r win-x64 -o dist   # build dist\WindowManager.exe
 dist\WindowManager.exe                              # runs in the background, no window
 ```
 
-- Starting it again replaces the running instance. The old instance shuts down cleanly first.
+- Starting it again replaces every running instance. Each old instance is asked to quit, so it restores its windows. One that doesn't respond within 3 s is terminated, and the new instance repairs the windows it left behind, using `state.json`.
 - Quit with **Ctrl+Alt+Shift+Q**. This restores every window's title bar, border and position.
 - **Don't run `binds.ahk` at the same time.** Every bind fires twice, and its TrackPoint handler stalls input for about 300 ms at a time. The script is started from `binds - Shortcut.lnk` in the Startup folder.
 - To start it at logon, put a shortcut to `dist\WindowManager.exe` in `shell:startup`. To manage windows that run as administrator, run it elevated instead, for example from a Task Scheduler task with "Run with highest privileges".
@@ -46,6 +46,7 @@ All files live in `%LOCALAPPDATA%\WindowManager\`.
 |---|---|
 | `wm.log` | Every decision: windows stripped or skipped (and why), crops, hotkey actions, Win32 failures. It rotates to `wm.log.old` past 5 MB |
 | `crop.json` | Per-app crop heights in DPI-independent units, written by Win+Alt+PageUp/PageDown. Overrides the defaults in `Crop.Defaults` |
+| `state.json` | Windows the running instance has changed: original style and crop slot. It exists only while the program runs. If one is left behind, the next start undoes those changes |
 
 ## Troubleshooting
 
@@ -59,7 +60,8 @@ Start with the log, not the app.
   - Gaps between samples with `lag=0`: something upstream is stalling input, usually another program's low-level hook.
   - High `lag`: this program's thread was busy.
 - **The TrackPoint isn't found:** the log lists every mouse device at startup. Put the right hardware ID in `TrackPointMatch` in Program.cs (it is currently `LEN0325`).
-- **Windows stay without a title bar after a crash:** start the program again and quit it with Ctrl+Alt+Shift+Q, or press Alt+T on the window.
+- **Windows stay without a title bar after a crash:** start the program again. It repairs what the crashed instance left behind, and Ctrl+Alt+Shift+Q then restores everything.
+- **`dotnet publish` fails because the exe is locked:** an old instance is still running, or is a zombie stuck terminating; those last until reboot. Quit it, or rename `dist\WindowManager.exe` (Windows allows renaming a running exe) and publish again.
 
 ## How it works
 
@@ -76,6 +78,7 @@ The reasoning behind each decision, including the measurements from the spikes, 
 | `WindowManager/Logic.cs` | All decisions, as pure code: key state machine, window classification, cover and crop geometry, `CropTracker`, TrackPoint curve |
 | `WindowManager/Frames.cs` | Win32 operations on other windows' frames (style, DWM, region, moves) |
 | `WindowManager/Program.cs` | Message loop, hooks, WinEvents, timers. Applies the decisions and logs each one |
+| `WindowManager/State.cs` | `state.json` persistence and recovery after a terminated instance |
 | `WindowManager/Native.cs`, `Log.cs` | P/Invoke declarations, logging |
 | `WindowManager.Tests/` | xUnit tests. Most are pure-logic tests named after spec scenarios. The Win32 tests use windows the test creates itself, never your apps |
 

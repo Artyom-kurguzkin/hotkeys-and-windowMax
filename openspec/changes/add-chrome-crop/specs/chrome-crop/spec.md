@@ -32,6 +32,10 @@ The system SHALL stretch each window with a self-drawn title bar upward by its c
 - **WHEN** Windows moves the window back to a rect that the system had already produced by cropping
 - **THEN** only the clip is refreshed and the window is not extended again
 
+#### Scenario: Sideways resize keeps the vertical slot
+- **WHEN** a cropped window is resized sideways and reports a rect that still has the cropped top edge, possibly with its height clamped
+- **THEN** only the slot's width is updated, and the window is re-cropped to the slot's full height without being moved up again
+
 #### Scenario: Refused crop is not retried
 - **WHEN** an app snaps back to the same rect after a crop attempt
 - **THEN** the same crop is not attempted again until the window moves elsewhere

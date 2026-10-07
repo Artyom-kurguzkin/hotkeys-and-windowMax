@@ -35,8 +35,30 @@ The system SHALL exit cleanly on Ctrl+Alt+Shift+Q.
 - **THEN** the program logs shutdown and exits
 
 ### Requirement: Single instance
-The system SHALL ask an already running instance to exit cleanly when a new instance starts. The new instance SHALL continue once the old one has exited.
+The system SHALL, on start, ask every already running instance to exit cleanly. Any instance that has not exited within 3 seconds SHALL be terminated. Only the new instance SHALL keep running.
 
 #### Scenario: Second instance replaces first
 - **WHEN** a second instance starts while one is running
-- **THEN** the first instance exits cleanly and the second keeps running
+- **THEN** the first instance exits cleanly, restoring its windows, and the second keeps running
+
+#### Scenario: Unresponsive instance is terminated
+- **WHEN** a new instance starts while an old instance is running but not responding
+- **THEN** the old instance is terminated after 3 seconds and the new one keeps running
+
+### Requirement: Recover after a terminated instance
+The system SHALL persist which windows it changed, with their original style and crop slot, whenever it changes them. On start, it SHALL undo any changes left behind by an instance that was terminated or crashed. After a clean exit there SHALL be nothing to undo.
+
+#### Scenario: Recovery undoes a dead instance's changes
+- **WHEN** an instance is terminated while windows are stripped and cropped
+- **THEN** the next instance first restores those windows' title bars, removes their clips and returns them to their slots
+
+#### Scenario: Clean exit leaves nothing to recover
+- **WHEN** an instance exits cleanly
+- **THEN** no recovery record remains
+
+### Requirement: Input is never injected from the hook thread
+The system SHALL send all synthetic input from a dedicated thread, in order, and never from the thread that runs its keyboard and mouse hooks.
+
+#### Scenario: Masked release sends mask before the release
+- **WHEN** a modifier release must be masked
+- **THEN** the physical release is withheld and the mask key followed by the release is sent in that order
