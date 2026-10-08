@@ -383,9 +383,14 @@ public static class Chrome
 
     public const string UwpFrameClass = "ApplicationFrameWindow";
 
+    // User request: leave File Explorer and Notepad alone entirely (no strip, no crop, no cover).
+    public static readonly HashSet<string> ExcludedProcesses = new(StringComparer.OrdinalIgnoreCase) { "explorer", "notepad" };
+
     // UWP app frames carry WS_POPUP but are ordinary app windows, so the popup bit is ignored for them.
-    public static bool IsManageable(uint style, uint exStyle, string? className = null) =>
-        Focus.IsRealWindow(className == UwpFrameClass ? style & ~Focus.WS_POPUP : style) && (exStyle & WS_EX_TOOLWINDOW) == 0;
+    public static bool IsManageable(uint style, uint exStyle, string? className = null, string? processName = null) =>
+        Focus.IsRealWindow(className == UwpFrameClass ? style & ~Focus.WS_POPUP : style)
+        && (exStyle & WS_EX_TOOLWINDOW) == 0
+        && (processName is null || !ExcludedProcesses.Contains(processName));
 
     public static bool HasCaption(uint style) => (style & WS_CAPTION) != 0;
 

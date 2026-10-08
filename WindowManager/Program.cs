@@ -362,7 +362,7 @@ static class Program
         if (managed.ContainsKey(hwnd)) return;
         var style = Frames.Style(hwnd);
         var cls = Frames.ClassName(hwnd);
-        if (!Chrome.IsManageable(style, Frames.ExStyle(hwnd), cls)) return;
+        if (!Chrome.IsManageable(style, Frames.ExStyle(hwnd), cls, ProcessName(hwnd))) return;
         if (IsIconic(hwnd)) return; // classification needs real geometry; picked up on its next location change
 
         // Classify before stripping: once WS_CAPTION is gone every window would look self-drawn.
@@ -718,7 +718,7 @@ static class Program
             GetWindowRect(hwnd, out var r);
             var dpi = GetDpiForWindow(hwnd);
             var selfDrawn = Crop.IsSelfDrawn(r, Frames.ClientOnScreen(hwnd), dpi);
-            lines.Add($"{Describe(hwnd),-32} manageable={Chrome.IsManageable(style, ex, cls),-5} caption={Chrome.HasCaption(style),-5} " +
+            lines.Add($"{Describe(hwnd),-32} manageable={Chrome.IsManageable(style, ex, cls, ProcessName(hwnd)),-5} caption={Chrome.HasCaption(style),-5} " +
                       $"selfDrawn={selfDrawn,-5} crop={Crop.DipFor(ProcessName(hwnd), cropOverrides)}dip dpi={dpi} " +
                       $"style=0x{style:X8} ex=0x{ex:X8} rect={r} class={cls} title=\"{Frames.Title(hwnd)}\"");
             return true;

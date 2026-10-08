@@ -297,6 +297,16 @@ public class BorderlessWindowsTests
     [InlineData(Overlapped | Focus.WS_POPUP, 0u)]
     public void Tool_window_is_left_alone(uint style, uint ex) => Assert.False(Chrome.IsManageable(style, ex));
 
+    [Theory]
+    [InlineData("explorer")]
+    [InlineData("Explorer")] // case-insensitive
+    [InlineData("notepad")]
+    [InlineData("Notepad")]
+    public void Excluded_app_is_left_alone(string processName) => Assert.False(Chrome.IsManageable(Overlapped, 0, processName: processName));
+
+    [Fact]
+    public void Other_apps_are_unaffected_by_the_exclusion() => Assert.True(Chrome.IsManageable(Overlapped, 0, processName: "vivaldi"));
+
     [Fact]
     public void Window_stays_resizable()
     {
