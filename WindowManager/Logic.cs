@@ -662,3 +662,87 @@ public sealed class CropTracker
         return new CropStep(CropKind.Apply, target, region);
     }
 }
+
+// The hand-drawn cursors from the portfolio site (../portfolio/src/styles/global.css), drawn natively: same 40x40
+// viewBox, paths, colours and hotspots. Only the standard arrow and hand are replaced (see CursorTheme.cs), so anything
+// that sets its own cursor (a website's CSS cursor, a game) keeps it.
+public static class CursorArt
+{
+    public const int Size = 40;              // viewBox and CSS size
+    public const uint Fill = 0xFFC94D;       // --color-yellow
+    public const uint Line = 0x17171C;
+    public const double DetailOpacity = 0.55;
+
+    public sealed record Shape(string Outline, string Details, double HotX, double HotY);
+
+    public static readonly Shape Arrow = new(
+        "M4.5 3 Q4 17 5.5 31 Q8.5 27.5 12 24.5 Q15 30.5 18.5 36 Q21 35.2 23.5 33.8 Q20 28 17.2 22.3 Q22.6 22.6 28.5 21.8 Q16 12 4.5 3 Z",
+        "M6 5 Q5.6 17 6.8 28.5 M13 25.8 Q16 31 19 35 M18.5 23.6 Q23 23.4 26.5 22.6",
+        4, 3);
+
+    public static readonly Shape Hand = new(
+        "M13 6.5 Q12.8 3 16 3 Q19.2 3 19 6.5 L19.2 17 Q19.5 14.8 22.2 15 Q25 15.3 25 18 Q25.3 16 28 16.2 Q31 16.5 30.8 19.2 " +
+        "Q31.4 17.6 33.6 18 Q36 18.6 35.8 21.5 L35.2 29 Q34.3 36.2 27 37 L19.5 37 Q14.2 36.6 11 32.2 L5.2 24.5 " +
+        "Q3.6 21.8 5.6 20.6 Q7.6 19.6 9.6 21.6 L13.2 25.2 Z",
+        "M19.2 17 Q19.4 20 19 22.5 M25 18 Q25.2 20.5 24.8 22.8 M30.8 19.2 Q31 21.2 30.6 23.2 M14.4 7 Q14.2 14 14.6 22",
+        16, 3);
+
+    // A path as figures of cubic Bézier segments (GDI+ draws cubics; SVG Q/L are converted exactly).
+    public readonly record struct Pt(double X, double Y);
+    public sealed record Figure(Pt Start, List<(Pt C1, Pt C2, Pt End)> Segments, bool Closed);
+
+    // ponytail: absolute M/L/Q/Z only, which is all these two cursors use; extend if a new shape needs more.
+    public static List<Figure> Parse(string d)
+    {
+        var tokens = d.Replace(",", " ").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var figures = new List<Figure>();
+        Figure? cur = null;
+        Pt at = default;
+        double N(int i) => double.Parse(tokens[i], System.Globalization.CultureInfo.InvariantCulture);
+        for (var i = 0; i < tokens.Length;)
+        {
+            var cmd = tokens[i][0];
+            var rest = tokens[i].Length > 1 ? tokens[i][1..] : null; // "M4.5" style: number glued to the command
+            if (rest is not null) tokens[i] = rest; else i++;
+            switch (cmd)
+            {
+                case 'M':
+                    at = new Pt(N(i), N(i + 1)); i += 2;
+                    cur = new Figure(at, [], false);
+                    figures.Add(cur);
+                    break;
+                case 'L':
+                {
+                    var p = new Pt(N(i), N(i + 1)); i += 2;
+                    cur!.Segments.Add((Lerp(at, p, 1 / 3.0), Lerp(at, p, 2 / 3.0), p)); // a straight cubic
+                    at = p;
+                    break;
+                }
+                case 'Q':
+                {
+                    var q = new Pt(N(i), N(i + 1)); var p = new Pt(N(i + 2), N(i + 3)); i += 4;
+                    cur!.Segments.Add(QuadToCubic(at, q, p));
+                    at = p;
+                    break;
+                }
+                case 'Z':
+                    figures[^1] = cur! with { Closed = true };
+                    cur = figures[^1];
+                    at = cur.Start;
+                    break;
+                default: throw new FormatException($"unsupported path command '{cmd}'");
+            }
+        }
+        return figures;
+    }
+
+    // Exact: a quadratic (p0, q, p) is the cubic with controls 2/3 of the way from each end to q.
+    public static (Pt C1, Pt C2, Pt End) QuadToCubic(Pt p0, Pt q, Pt p) => (Lerp(p0, q, 2 / 3.0), Lerp(p, q, 2 / 3.0), p);
+
+    static Pt Lerp(Pt a, Pt b, double t) => new(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t);
+
+    // The browser draws the 40px cursor at 40 * devicePixelRatio; same here with the display's DPI.
+    public static int PixelSize(uint dpi) => Scale(Size, dpi);
+    public static (int X, int Y) Hotspot(Shape s, uint dpi) => (Scale(s.HotX, dpi), Scale(s.HotY, dpi));
+    static int Scale(double v, uint dpi) => (int)Math.Round(v * dpi / 96.0, MidpointRounding.AwayFromZero); // 4.5 -> 5, not 4
+}

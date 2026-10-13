@@ -4,6 +4,7 @@ A Windows 11 hotkey daemon and borderless window manager. It replaces `binds.ahk
 
 - Every app window loses its title bar, border and rounded corners. Layout stays with Windows: maximize, Snap, Win+Arrow and moving between monitors all work as usual.
 - Apps that draw their own title bar or tab strip (Chrome, Edge, Vivaldi, VS Code, Electron apps, Explorer, Outlook, Terminal) have it cropped off. Win+Alt shows it again on the active window.
+- While it runs, Windows' standard arrow and link hand become the hand-drawn yellow cursors from the portfolio site. Programs with their own cursors (websites, games) keep theirs; quitting restores yours.
 - Window control is done with hotkeys. The `binds.ahk` binds are ported: line navigation, scrolling, desktop switching, hover-to-focus, and Alt+TrackPoint scrolling.
 
 ## Run
@@ -102,6 +103,7 @@ The reasoning behind each decision, including the measurements from the spikes, 
 | `WindowManager/Program.cs` | Message loop, hooks, WinEvents, timers, input sender, border overlay, moves between monitors. Applies the decisions and logs each one |
 | `WindowManager/State.cs` | `state.json` persistence and recovery after a terminated instance |
 | `WindowManager/HelpWindow.cs` | The themed hotkey table (WinForms ListView, light/dark) |
+| `WindowManager/CursorTheme.cs` | The hand-drawn cursors: GDI+ rendering of the portfolio's SVG paths, swapped in with `SetSystemCursor` |
 | `WindowManager/Native.cs`, `Log.cs` | P/Invoke declarations, logging |
 | `WindowManager.Tests/` | xUnit tests. Most are pure-logic tests named after spec scenarios. The Win32 tests use windows the test creates itself, never your apps |
 

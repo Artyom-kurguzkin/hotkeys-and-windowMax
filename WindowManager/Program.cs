@@ -63,7 +63,7 @@ static class Program
     static int Main(string[] args)
     {
         Log.Init(Log.DefaultDir, args.Contains("--verbose"));
-        AppDomain.CurrentDomain.UnhandledException += (_, e) => Log.Info($"CRASH {e.ExceptionObject}");
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => { Log.Info($"CRASH {e.ExceptionObject}"); CursorTheme.Restore(); };
         Log.Info($"start pid={Environment.ProcessId} args=[{string.Join(' ', args)}]");
         // Real pixel rects for every window on every monitor; without it Windows hands us DPI-virtualized coordinates.
         if (!SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) Log.Win32("SetProcessDpiAwarenessContext");
@@ -107,6 +107,7 @@ static class Program
         lastTick = Environment.TickCount64;
         if (RegisterSuspendResumeNotification(msgWnd, DEVICE_NOTIFY_WINDOW_HANDLE) == IntPtr.Zero)
             Log.Win32("RegisterSuspendResumeNotification (wake still detected by the clock jump)");
+        CursorTheme.Apply();
 
         while (GetMessage(out var msg, IntPtr.Zero, 0, 0) > 0)
         {
@@ -119,6 +120,7 @@ static class Program
         UnhookWindowsHookEx(hook);
         if (mouseHook != IntPtr.Zero) UnhookWindowsHookEx(mouseHook);
         RestoreAll();
+        CursorTheme.Restore();
         State.Delete(State.DefaultPath); // clean exit: nothing left for a successor to undo
         Log.Info("shutdown");
         return 0;
