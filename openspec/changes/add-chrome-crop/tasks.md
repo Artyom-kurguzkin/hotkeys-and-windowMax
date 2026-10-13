@@ -25,10 +25,11 @@
 - [x] 4.6 Re-check refused crops after 300 ms (Snap Layouts re-applies positions), up to 3 times per slot, without an event storm; handle location changes from the message loop instead of the WinEvent callback
 - [x] 4.7 Close Chromium's 2 px bottom sliver on maximized windows (`Crop.MaximizedVisible`)
 - [x] 4.8 Remove the crop-tuning hotkey (user request); crop heights change only via `crop.json`
+- [x] 4.9 Never crop UWP frames (`Crop.ShouldCrop`, by frame class; packaged Win32 apps still cropped); add unit tests, and verify live that Calculator is stripped but gets no crop
 
 ## 5. Manual checks
 
-- [ ] 5.1 With Edge, Explorer and Slack: no tab strip or top bar, nothing visible on a monitor above, Win+Alt reveals and hides the active window only without opening Start, Alt+T works per window, and Snap Layouts leaves no gaps
+- [ ] 5.1 With Edge, Vivaldi and Slack (Explorer is excluded): no tab strip or top bar, nothing visible on a monitor above, Win+Alt reveals and hides the active window only without opening Start, Alt+T works per window, and Snap Layouts leaves no gaps
 
 ## Workflow follow-up
 

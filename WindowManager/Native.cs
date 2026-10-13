@@ -67,6 +67,12 @@ public static class Native
 
     // Timers, focus, cursor
     public const int WM_TIMER = 0x0113, WM_INPUT = 0x00FF;
+
+    // Sleep / wake. Message-only windows get no broadcasts, so the notification is registered explicitly.
+    public const int WM_POWERBROADCAST = 0x0218;
+    public const int PBT_APMSUSPEND = 0x4, PBT_APMRESUMESUSPEND = 0x7, PBT_APMRESUMEAUTOMATIC = 0x12;
+    public const uint DEVICE_NOTIFY_WINDOW_HANDLE = 0;
+    [DllImport("user32.dll", SetLastError = true)] public static extern IntPtr RegisterSuspendResumeNotification(IntPtr hRecipient, uint flags);
     public const int GWL_STYLE = -16, GWL_EXSTYLE = -20;
     public const uint GA_ROOT = 2;
 

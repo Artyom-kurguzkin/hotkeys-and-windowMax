@@ -25,7 +25,15 @@ static class Program
     static IntPtr msgWnd;
 
     const uint HoverIntervalMs = 700, AltSettleMs = 50, WatchdogMs = 30;
-    static readonly UIntPtr TimerHover = 1, TimerAltReleased = 2, TimerWatchdog = 3, TimerCropRetry = 4, TimerHighlight = 5;
+    static readonly UIntPtr TimerHover = 1, TimerAltReleased = 2, TimerWatchdog = 3, TimerCropRetry = 4, TimerHighlight = 5,
+        TimerSettle = 6, TimerRepair = 7;
+
+    // Sleep / display changes (see Layout in Logic.cs)
+    const uint RepairDelayMs = 500; // after moving windows back, let them land before re-cropping
+    static readonly Dictionary<IntPtr, LayoutRecord> layout = []; // last known-good place of each managed window
+    static string stableDisplays = "", pendingDisplays = "";
+    static bool settling; // displays changing or machine asleep: window moves are not tracked or reacted to
+    static long lastTick;
     const uint CropRetryMs = 300; // Snap Layouts re-applies its position after the animation; retry after that
     static readonly HashSet<IntPtr> cropRetries = [];
     static IntPtr prevActive, lastHover;
@@ -94,6 +102,11 @@ static class Program
         var moveHook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, IntPtr.Zero, winEventProc, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
         if (showHook == IntPtr.Zero || moveHook == IntPtr.Zero) Log.Info("SetWinEventHook failed: new windows won't be stripped");
         EnumWindows((hwnd, _) => { Manage(hwnd); return true; }, IntPtr.Zero);
+
+        stableDisplays = pendingDisplays = Layout.Signature(Displays());
+        lastTick = Environment.TickCount64;
+        if (RegisterSuspendResumeNotification(msgWnd, DEVICE_NOTIFY_WINDOW_HANDLE) == IntPtr.Zero)
+            Log.Win32("RegisterSuspendResumeNotification (wake still detected by the clock jump)");
 
         while (GetMessage(out var msg, IntPtr.Zero, 0, 0) > 0)
         {
@@ -178,6 +191,7 @@ static class Program
                     case WM_APP_MOVED: HandleMovedWindows(); break;
                     case WM_APP_MOVE_MONITOR: MoveToMonitor(GetForegroundWindow(), (int)wParam); break;
                     case WM_APP_HIGHLIGHT: Highlight(GetForegroundWindow()); break;
+                    case WM_POWERBROADCAST: OnPower((int)wParam); break;
                 }
             }
             catch (Exception e) { Log.Info($"wndproc error msg=0x{msg:X}: {e}"); }
@@ -283,7 +297,9 @@ static class Program
 
     static void OnTimer(UIntPtr id)
     {
-        if (id == TimerHover) HoverFocus();
+        if (id == TimerHover) { CheckDisplays(); HoverFocus(); }
+        else if (id == TimerSettle) { KillTimer(msgWnd, id); RepairMoveBack(); StartTimer(TimerRepair, RepairDelayMs); }
+        else if (id == TimerRepair) { KillTimer(msgWnd, id); RepairRecrop(); }
         else if (id == TimerWatchdog) { if (scroller.InGesture && !AltHeld) StopGesture("watchdog"); }
         else if (id == TimerAltReleased) { KillTimer(msgWnd, id); CenterAfterSwitch(); }
         else if (id == TimerHighlight) { KillTimer(msgWnd, id); foreach (var b in borders) ShowWindow(b, SW_HIDE); }
@@ -369,6 +385,7 @@ static class Program
         GetWindowRect(hwnd, out var window);
         var dpi = GetDpiForWindow(hwnd);
         var selfDrawn = Crop.IsSelfDrawn(window, Frames.ClientOnScreen(hwnd), dpi);
+        if (selfDrawn && !Crop.ShouldCrop(selfDrawn, cls)) { Log.Info($"uwp {Describe(hwnd)}: not cropped"); selfDrawn = false; }
 
         // Register before stripping: SetWindowLong waits on the app, and WinEvents for this window get dispatched
         // re-entrantly during that wait, so they must already see the final classification.
@@ -380,6 +397,7 @@ static class Program
                  (selfDrawn ? $" self-drawn crop={Crop.DipFor(ProcessName(hwnd), cropOverrides)}dip@{dpi}" : ""));
         if (selfDrawn) ApplyCrop(hwnd);
         else CoverIfMaximized(hwnd);
+        RecordLayout(hwnd);
     }
 
     static void OnWinEvent(IntPtr hook, uint evt, IntPtr hwnd, int idObject, int idChild, uint thread, uint time)
@@ -391,7 +409,7 @@ static class Program
             {
                 case EVENT_OBJECT_SHOW: Manage(hwnd); break;
                 case EVENT_OBJECT_DESTROY:
-                    userShown.Remove(hwnd); coverAttempts.Remove(hwnd); crops.Remove(hwnd); names.Remove(hwnd); backdrops.Remove(hwnd); revealed.Remove(hwnd);
+                    userShown.Remove(hwnd); coverAttempts.Remove(hwnd); crops.Remove(hwnd); names.Remove(hwnd); backdrops.Remove(hwnd); revealed.Remove(hwnd); layout.Remove(hwnd);
                     if (managed.Remove(hwnd)) SaveState();
                     break;
                 case EVENT_OBJECT_LOCATIONCHANGE when !managed.ContainsKey(hwnd):
@@ -410,6 +428,11 @@ static class Program
 
     static void HandleMovedWindows()
     {
+        // While displays change (or right after a wake) Windows moves windows around itself: don't crop, cover or
+        // record any of that. Checking the monitor set here catches the change even before the timer poll does.
+        if (!settling && Layout.Signature(Displays()) != stableDisplays) BeginSettle("displays changed");
+        if (settling) { movedWindows.Clear(); return; }
+
         foreach (var hwnd in movedWindows.ToArray())
         {
             movedWindows.Remove(hwnd);
@@ -421,12 +444,13 @@ static class Program
             }
             if (crops.ContainsKey(hwnd)) ApplyCrop(hwnd);
             else CoverIfMaximized(hwnd);
+            RecordLayout(hwnd);
         }
     }
 
     static void CoverIfMaximized(IntPtr hwnd)
     {
-        if (userShown.Contains(hwnd) || !GetWindowRect(hwnd, out var window)) return;
+        if (settling || userShown.Contains(hwnd) || !GetWindowRect(hwnd, out var window)) return;
         var monitor = Frames.MonitorRect(hwnd);
         if (Chrome.CoverRect(IsZoomed(hwnd), monitor, window, Frames.ClientOnScreen(hwnd)) is not { } target)
         {
@@ -445,7 +469,7 @@ static class Program
 
     static void ApplyCrop(IntPtr hwnd)
     {
-        if (revealed.Contains(hwnd) || userShown.Contains(hwnd) || IsIconic(hwnd) || !crops.TryGetValue(hwnd, out var tracker)) return;
+        if (settling || revealed.Contains(hwnd) || userShown.Contains(hwnd) || IsIconic(hwnd) || !crops.TryGetValue(hwnd, out var tracker)) return;
         if (!GetWindowRect(hwnd, out var window)) return;
         if (Crop.IsAppFullscreen(window, Frames.MonitorRect(hwnd)))
         {
@@ -621,6 +645,138 @@ static class Program
     // Runs on its own UI thread, so it never blocks the hook thread.
     static void ShowHelp() => Log.Info(HelpWindow.Toggle(GetForegroundWindow()) ? "hotkey list opened" : "hotkey list closed");
 
+    // ---- sleep and display changes ----
+
+    static List<Display> Displays() => [.. Frames.AllMonitors().Select(m => new Display(m.Device, m.Bounds))];
+
+    // Window placement rects are in workspace coordinates: relative to the primary monitor's work area.
+    static (int X, int Y) WorkspaceOrigin()
+    {
+        var w = Frames.AllMonitors().FirstOrDefault(m => m.Primary)?.Work ?? default;
+        return (w.Left, w.Top);
+    }
+
+    // Every 700ms (hover timer): a wall-clock jump means the machine woke up; a changed monitor set means displays
+    // are being added/removed/rearranged (also what display sleep does to DisplayPort monitors).
+    static void CheckDisplays()
+    {
+        var now = Environment.TickCount64;
+        if (Layout.SleptBetween(lastTick, now)) BeginSettle($"woke up ({(now - lastTick) / 1000}s without a tick)");
+        lastTick = now;
+        var sig = Layout.Signature(Displays());
+        if (sig != pendingDisplays) { pendingDisplays = sig; BeginSettle("displays changed"); }
+    }
+
+    static void OnPower(int evt)
+    {
+        if (evt == PBT_APMSUSPEND)
+        {
+            settling = true; // freeze: the layout recorded now is what gets restored on wake
+            KillTimer(msgWnd, TimerSettle);
+            Log.Info("suspend: window tracking frozen");
+        }
+        else if (evt is PBT_APMRESUMEAUTOMATIC or PBT_APMRESUMESUSPEND)
+        {
+            Log.Info($"resume (power event 0x{evt:X})");
+            BeginSettle("resume");
+        }
+    }
+
+    // Stop reacting to window moves and (re)start the settle timer; it fires once displays stay unchanged for
+    // SettleMs, then the windows are put back and re-cropped.
+    static void BeginSettle(string why)
+    {
+        if (!settling) Log.Info($"{why}: window tracking frozen until displays settle");
+        else Log.Debug($"{why}: settle timer restarted");
+        settling = true;
+        movedWindows.Clear();
+        StartTimer(TimerSettle, Layout.SettleMs);
+    }
+
+    // The rect Windows laid the window out at, never our stretched crop rect. Cropped + maximized: its slot.
+    // Cropped + floating/snapped: what is visible (the slot is already widened by the invisible borders, and
+    // re-cropping from it would widen it twice: measured +20x10px after a simulated wake).
+    static Rect LaidOutRect(IntPtr hwnd, Rect rect)
+    {
+        if (!crops.TryGetValue(hwnd, out var t) || t.SlotFor(rect) is not { } slot) return rect;
+        if (IsZoomed(hwnd) || GetWindowRgnBox(hwnd, out var region) == 0) return slot;
+        return Crop.VisibleOnScreen(rect, region);
+    }
+
+    static void RecordLayout(IntPtr hwnd)
+    {
+        if (settling || IsIconic(hwnd) || !GetWindowRect(hwnd, out var rect) || Frames.MonitorOf(hwnd) is not { } mon) return;
+        var wp = new WINDOWPLACEMENT { length = Marshal.SizeOf<WINDOWPLACEMENT>() };
+        if (!GetWindowPlacement(hwnd, ref wp)) return;
+        var (ox, oy) = WorkspaceOrigin();
+        layout[hwnd] = new LayoutRecord(new Display(mon.Device, mon.Bounds), LaidOutRect(hwnd, rect), IsZoomed(hwnd), wp.rcNormal.Offset(ox, oy));
+    }
+
+    // Phase 1, displays settled: drop the pre-sleep clips and crop state, and put windows back where they were.
+    static void RepairMoveBack()
+    {
+        var displays = Displays();
+        stableDisplays = pendingDisplays = Layout.Signature(displays);
+        int moved = 0, reset = 0;
+        foreach (var hwnd in managed.Keys.ToArray())
+        {
+            if (!IsWindow(hwnd) || IsIconic(hwnd) || !GetWindowRect(hwnd, out var rect)) continue;
+            var slot = LaidOutRect(hwnd, rect); // before the clip is dropped: it is part of the answer
+            if (crops.ContainsKey(hwnd))
+            {
+                // The clip and crop history describe the geometry from before: start the crop over from Windows' rect.
+                Frames.SetRegion(hwnd, null);
+                crops[hwnd] = new CropTracker();
+                cropRetries.Remove(hwnd);
+                reset++;
+            }
+            coverAttempts.Remove(hwnd);
+
+            var target = Layout.RestoreTarget(layout.GetValueOrDefault(hwnd), displays);
+            var device = Frames.MonitorOf(hwnd)?.Device ?? "";
+            if (target is not null && !Layout.AlreadyThere(target, device, IsZoomed(hwnd), slot))
+            {
+                PlaceBack(hwnd, target);
+                moved++;
+            }
+            else if (slot != rect) Frames.MoveUnclamped(hwnd, slot); // still stretched: back onto its slot first
+        }
+        Log.Info($"displays settled ({displays.Count} monitors): {moved} windows put back, {reset} crops reset");
+    }
+
+    static void PlaceBack(IntPtr hwnd, LayoutRecord target)
+    {
+        var wp = new WINDOWPLACEMENT { length = Marshal.SizeOf<WINDOWPLACEMENT>() };
+        if (!GetWindowPlacement(hwnd, ref wp)) { Log.Win32("GetWindowPlacement"); return; }
+        var (ox, oy) = WorkspaceOrigin();
+        // Like MoveToMonitor: place it normal first (Windows ignores a new restore rect on a maximized window), then
+        // set the rect again once it is on that monitor (DPI rescale), then maximize if it was.
+        var normal = target.Zoomed ? target.Normal : target.Slot;
+        wp.rcNormal = normal.Offset(-ox, -oy);
+        wp.showCmd = SW_SHOWNORMAL;
+        wp.flags = 0;
+        if (!SetWindowPlacement(hwnd, ref wp)) { Log.Win32("SetWindowPlacement"); return; }
+        SetWindowPos(hwnd, IntPtr.Zero, normal.Left, normal.Top, normal.Width, normal.Height, SWP_NOZORDER | SWP_NOACTIVATE);
+        if (target.Zoomed) ShowWindow(hwnd, SW_MAXIMIZE);
+        Log.Info($"put back {Describe(hwnd)} on {target.Display.Device}{(target.Zoomed ? " maximized" : $" at {target.Slot}")}");
+    }
+
+    // Phase 2: windows have landed; resume tracking and re-apply what the sleep may have lost (DWM border/corner
+    // attributes after a DWM restart, crops, the taskbar cover).
+    static void RepairRecrop()
+    {
+        settling = false;
+        foreach (var hwnd in managed.Keys.ToArray())
+        {
+            if (!IsWindow(hwnd) || IsIconic(hwnd)) continue;
+            if (!userShown.Contains(hwnd)) Frames.Strip(hwnd);
+            if (crops.ContainsKey(hwnd)) ApplyCrop(hwnd);
+            else CoverIfMaximized(hwnd);
+            RecordLayout(hwnd);
+        }
+        Log.Info("windows re-cropped, tracking resumed");
+    }
+
     // ---- move between monitors (Copilot key + 1-9) ----
 
     static void MoveToMonitor(IntPtr hwnd, int number)
@@ -717,7 +873,7 @@ static class Program
             var cls = Frames.ClassName(hwnd);
             GetWindowRect(hwnd, out var r);
             var dpi = GetDpiForWindow(hwnd);
-            var selfDrawn = Crop.IsSelfDrawn(r, Frames.ClientOnScreen(hwnd), dpi);
+            var selfDrawn = Crop.ShouldCrop(Crop.IsSelfDrawn(r, Frames.ClientOnScreen(hwnd), dpi), cls); // what would be cropped
             lines.Add($"{Describe(hwnd),-32} manageable={Chrome.IsManageable(style, ex, cls, ProcessName(hwnd)),-5} caption={Chrome.HasCaption(style),-5} " +
                       $"selfDrawn={selfDrawn,-5} crop={Crop.DipFor(ProcessName(hwnd), cropOverrides)}dip dpi={dpi} " +
                       $"style=0x{style:X8} ex=0x{ex:X8} rect={r} class={cls} title=\"{Frames.Title(hwnd)}\"");

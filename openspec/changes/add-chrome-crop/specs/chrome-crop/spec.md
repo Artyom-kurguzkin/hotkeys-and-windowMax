@@ -130,12 +130,20 @@ The system SHALL show the full title bar of the active cropped window on Alt+T, 
 - **WHEN** the user presses Alt+T on a cropped window
 - **THEN** that window's bar is shown and other windows stay cropped
 
-### Requirement: UWP frames are managed
-The system SHALL manage UWP app frame windows like other application windows, even though they carry the popup style.
+### Requirement: UWP frames are managed but not cropped
+The system SHALL manage UWP app frame windows (class `ApplicationFrameWindow`, hosted by ApplicationFrameHost) like other application windows, even though they carry the popup style, but SHALL NOT crop them: the frame host re-adds its caption and re-lays-out its content, so a crop keeps fighting it. Detection is by the frame's class, so any UWP app is caught without a list. Packaged Win32 apps (new Outlook, Windows Terminal) are not UWP frames and are still cropped.
 
 #### Scenario: ApplicationFrameWindow is manageable
 - **WHEN** a visible ApplicationFrameWindow is shown
-- **THEN** it is managed and cropped like other self-drawn-bar windows
+- **THEN** it is managed: its caption style is removed and it covers the taskbar when maximized
+
+#### Scenario: Uwp frame is not cropped
+- **WHEN** a UWP frame window with a self-drawn title bar is managed
+- **THEN** it is not cropped and keeps its title bar
+
+#### Scenario: Other self drawn apps are still cropped
+- **WHEN** a self-drawn-bar window that is not a UWP frame is managed, including a packaged Win32 app
+- **THEN** it is cropped as before
 
 ### Requirement: Crops removed on quit
 The system SHALL remove every clip and return every cropped window to its assigned area when it quits.

@@ -289,6 +289,7 @@ public record struct Rect(int Left, int Top, int Right, int Bottom)
     public readonly int Height => Bottom - Top;
     public readonly bool Contains(int x, int y) => x >= Left && x <= Right && y >= Top && y <= Bottom;
     public readonly (int X, int Y) Center => (Left + Width / 2, Top + Height / 2);
+    public readonly Rect Offset(int dx, int dy) => new(Left + dx, Top + dy, Right + dx, Bottom + dy);
     public override readonly string ToString() => $"({Left},{Top} {Width}x{Height})";
 }
 
@@ -446,6 +447,36 @@ public static class Monitors
     }
 }
 
+public readonly record struct Display(string Device, Rect Bounds);
+
+// Where a window was while the displays were last stable. Slot = Windows' own rect (never our stretched crop rect);
+// Normal = its restore rect (screen coordinates), used to re-maximize it on the right monitor.
+public sealed record LayoutRecord(Display Display, Rect Slot, bool Zoomed, Rect Normal);
+
+// Sleep / display-change handling. While the monitor set is changing (monitors dropping out on display sleep, coming
+// back on wake) Windows shuffles windows around: those moves must not overwrite the known-good layout, and once the
+// displays settle the windows go back to it and are re-cropped from scratch.
+public static class Layout
+{
+    public const uint SettleMs = 2000; // displays unchanged this long = settled
+    public const long SleepGapMs = 30_000; // the 700ms timer didn't tick for this long: the machine was asleep
+
+    public static string Signature(IEnumerable<Display> displays) =>
+        string.Join(";", displays.OrderBy(d => d.Device, StringComparer.Ordinal)
+            .Select(d => $"{d.Device}@{d.Bounds.Left},{d.Bounds.Top},{d.Bounds.Right},{d.Bounds.Bottom}"));
+
+    // GetTickCount64 keeps counting through sleep while timers don't fire, so a long gap between ticks = a wake.
+    public static bool SleptBetween(long previousTickMs, long nowMs) => nowMs - previousTickMs > SleepGapMs;
+
+    // The record to put a window back to: only if its monitor is back with the same position and size.
+    public static LayoutRecord? RestoreTarget(LayoutRecord? record, IEnumerable<Display> now) =>
+        record is not null && now.Contains(record.Display) ? record : null;
+
+    // Already where it should be: no move needed (moving it anyway would make apps redraw for nothing).
+    public static bool AlreadyThere(LayoutRecord record, string device, bool zoomed, Rect slot) =>
+        record.Display.Device == device && record.Zoomed == zoomed && (zoomed || slot == record.Slot);
+}
+
 // Cropping the title bar / tab strip that apps draw inside their own client area.
 public static class Crop
 {
@@ -462,6 +493,15 @@ public static class Crop
     // No system caption above the content (only the frame overhang a maximized window has) = the app draws its own bar.
     // Must be judged before WS_CAPTION is stripped, or every classic window would look self-drawn.
     public static bool IsSelfDrawn(Rect window, Rect client, uint dpi) => client.Top - window.Top <= SelfDrawnMaxGapDip * (int)dpi / 96;
+
+    // UWP apps (hosted by ApplicationFrameHost: Settings, Calculator, Photos...) are never cropped: the frame host
+    // re-adds its caption and re-lays-out its content, so the crop kept fighting it. Detected by the host frame's
+    // class, so any UWP app is caught without a list. Packaged Win32 apps (new Outlook, Terminal) are still cropped.
+    public static bool ShouldCrop(bool selfDrawn, string className) => selfDrawn && className != Chrome.UwpFrameClass;
+
+    // What a cropped window shows on screen: its clip region (window coordinates) placed at the window. For a floating
+    // or snapped window this is the area Windows laid out, before the crop widened it by its invisible borders.
+    public static Rect VisibleOnScreen(Rect window, Rect region) => region.Offset(window.Left, window.Top);
 
     // App-level fullscreen (F11, VS Code fullscreen): exactly the monitor rect, no frame overhang. A real maximized
     // window always overhangs by its frame, and a cropped one extends above. The app already hid its bar: don't crop.

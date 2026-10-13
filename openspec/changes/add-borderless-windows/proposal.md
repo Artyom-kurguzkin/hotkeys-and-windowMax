@@ -6,7 +6,7 @@ Title bars, borders and caption buttons waste space and add visual noise. The go
 
 ## What Changes
 
-- Every real application window has its title bar removed. Windows' own borders, accent color and rounded corners are also turned off. Dialogs, popups and tool windows are left alone.
+- Every real application window has its title bar removed. Windows' own borders, accent color and rounded corners are also turned off. Dialogs, popups, tool windows, File Explorer and Notepad are left alone.
 - Windows can still be resized, snapped, maximized and moved between monitors with Windows' own keys (Win+Arrow, Win+Shift+Arrow).
 - A maximized window covers the whole monitor, taskbar included.
 - If an app puts its title bar back, it is removed again.

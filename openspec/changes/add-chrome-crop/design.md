@@ -64,7 +64,7 @@ Strip heights measured with `PrintWindow`, in pixels at 144 DPI: Edge tab strip 
 - **Leave app fullscreen alone (found in the live run).** VS Code and Vivaldi in fullscreen measure `0,0 1920x1199`. Chromium stops 1px short of the bottom so an auto-hide taskbar can still be summoned. `Crop.IsAppFullscreen` therefore matches the monitor's left, top and right edges exactly and allows the bottom to be up to 2px short. A real maximized window always overhangs by its frame, so it never matches.
 - **Register before stripping (found in the live run).** `SetWindowLong` waits for the target app, and out-of-context WinEvents for that window are dispatched re-entrantly during the wait. `Manage` therefore records the classification before calling `Strip`.
 - **Reveal and quit** both call `Uncrop`: remove the region and move the window to its slot with the same flags.
-- **Manage UWP frames.** `Chrome.IsManageable` also accepts class `ApplicationFrameWindow` despite `WS_POPUP`.
+- **Manage UWP frames, but never crop them.** `Chrome.IsManageable` also accepts class `ApplicationFrameWindow` despite `WS_POPUP`. `Crop.ShouldCrop` then refuses to crop it (found in use: Settings kept re-adding its caption and fighting the crop). Detection is by the frame class rather than package identity on purpose: package identity would also catch packaged Win32 apps such as new Outlook, whose crop was measured and works (user decision).
 
 ## Risks / Trade-offs
 

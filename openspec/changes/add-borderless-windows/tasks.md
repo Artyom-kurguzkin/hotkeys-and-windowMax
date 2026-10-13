@@ -18,12 +18,15 @@
 - [x] 3.3 Add Win+Alt+X → close; add a unit test
 - [x] 3.4 Add the triple Alt tap → accent-coloured, click-through border overlay; add unit tests for timing, chords and TrackPoint use, and verify live that all four edges show the accent colour and clear after about a second
 - [x] 3.5 Add both Alts → the themed, grouped, sorted hotkey table (`HelpWindow.cs`), toggling closed on a second press, plus `--hotkeys`; add tests that every binding is listed and that the window toggles, and verify the look with screenshots
+- [x] 3.6 Exclude File Explorer and Notepad from management entirely (`Chrome.ExcludedProcesses`, checked in `IsManageable`); add unit tests for the exclusion and for other apps being unaffected, and verify live with `--dump` and the log that neither app is stripped, cropped or covered while other apps keep working
+- [x] 3.7 Survive sleep and display changes: track each window's laid-out place (`Layout`, `LayoutRecord`), freeze on suspend or monitor-set change (power notification, monitor poll, clock-jump wake detection), then put windows back and re-crop once displays settle; add unit tests, and verify with a simulated suspend/resume that an evacuated, un-clipped window returns pixel-exact
 
 ## 4. Manual checks
 
-- [ ] 4.1 With Notepad: no title bar, Win+Left/Right snaps, Win+Up covers the taskbar, Win+Shift+Right moves it to the other monitor, Alt+Q/M/N/T behave as specified, and Ctrl+Alt+Shift+Q restores every frame
+- [ ] 4.1 With WordPad or another plain app (not Notepad, which is now excluded): no title bar, Win+Left/Right snaps, Win+Up covers the taskbar, Win+Shift+Right moves it to the other monitor, Alt+Q/M/N/T behave as specified, and Ctrl+Alt+Shift+Q restores every frame
 - [ ] 4.2 With real keys: Ctrl+Win+Alt opens Snap Layouts, Copilot+digit and Win+Alt+digit move windows, Win+Alt+X closes, triple Alt flashes the border, both Alts open and close the hotkey table
+- [ ] 4.3 Real sleep: put the PC to sleep overnight with windows tiled and cropped across monitors; on wake they return to their places, cropped, and the log shows `displays settled`
 
 ## Workflow follow-up
 
-- Archive the change once 4.1 and 4.2 pass.
+- Archive the change once 4.1, 4.2 and 4.3 pass.

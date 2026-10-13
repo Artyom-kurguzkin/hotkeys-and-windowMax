@@ -21,6 +21,17 @@ The system SHALL remove the title bar from every real application window. That c
 - **WHEN** a window's title bar is removed
 - **THEN** it keeps its resizable frame and minimize/maximize abilities, so Snap, Win+Arrow and maximize keep working
 
+### Requirement: Excluded apps are left alone
+The system SHALL exclude File Explorer and Notepad from management entirely by process name, case-insensitively. An excluded window SHALL NOT be stripped, cropped or covered, and keeps its native title bar.
+
+#### Scenario: Excluded app keeps its title bar
+- **WHEN** a File Explorer or Notepad window is shown
+- **THEN** its style is not changed and it keeps its title bar
+
+#### Scenario: Other apps are unaffected by the exclusion
+- **WHEN** a window belongs to a process that is not on the excluded list
+- **THEN** it is managed normally
+
 ### Requirement: No border, accent or rounded corners
 The system SHALL turn off the visible accent border and corner rounding of each stripped window.
 
@@ -63,3 +74,22 @@ The system SHALL, when started with `--dump`, print every visible top-level wind
 #### Scenario: Dump changes nothing
 - **WHEN** the program runs with --dump
 - **THEN** it prints the window list, exits, and leaves every window's style unchanged
+
+### Requirement: Layout survives sleep and display changes
+The system SHALL track the last known-good place of every managed window (monitor, laid-out rect, maximized state, restore rect) while the displays are stable. It SHALL freeze that tracking when the machine suspends or the monitor set changes, and once the displays have been unchanged for 2 seconds it SHALL put windows back where they were and re-apply crops and borders from scratch.
+
+#### Scenario: Window evacuated during sleep is put back
+- **WHEN** a window is moved elsewhere and loses its crop while the machine sleeps, and its monitor is back unchanged after waking
+- **THEN** it returns to its exact pre-sleep place and crop
+
+#### Scenario: Window stays put when its monitor is gone
+- **WHEN** a window's monitor is missing or came back with a different position or size
+- **THEN** the window stays where Windows put it and is re-cropped there
+
+#### Scenario: Moves while displays change are not recorded
+- **WHEN** Windows moves windows while monitors are dropping out or coming back
+- **THEN** those moves neither crop nor overwrite the recorded layout
+
+#### Scenario: Wake is detected without a power notification
+- **WHEN** the program's 700 ms timer did not tick for more than 30 seconds
+- **THEN** it treats this as a wake and repairs the layout

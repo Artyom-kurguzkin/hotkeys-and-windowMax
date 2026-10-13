@@ -2,7 +2,7 @@
 
 ## Why
 
-Many apps draw their own title bar inside the window: Chrome, Edge, Vivaldi, VS Code, Electron apps (Slack, Discord, Obsidian), File Explorer's tab strip, new Outlook, Windows Terminal, Notepad and UWP apps. Removing `WS_CAPTION` doesn't touch those bars, so tab strips and min/max/close buttons stay visible. They should be hidden by default and shown on demand.
+Many apps draw their own title bar inside the window: Chrome, Edge, Vivaldi, VS Code, Electron apps (Slack, Discord, Obsidian), new Outlook and Windows Terminal. Removing `WS_CAPTION` doesn't touch those bars, so tab strips and min/max/close buttons stay visible. They should be hidden by default and shown on demand. (UWP apps also draw their own bar but are not cropped, see below. File Explorer and Notepad are excluded from all management, see `add-borderless-windows`.)
 
 ## What Changes
 
@@ -14,7 +14,7 @@ Many apps draw their own title bar inside the window: Chrome, Edge, Vivaldi, VS 
 - Alt+T on a cropped window shows its bar until Alt+T is pressed again.
 - Crop height is set per app (in DPI-independent units) and scaled to each window's DPI.
   - A hand-edited `crop.json` can override the defaults. No hotkey changes crop heights.
-- UWP app frames (`ApplicationFrameWindow`) become manageable even though they carry the popup style.
+- UWP app frames (`ApplicationFrameWindow`) become manageable even though they carry the popup style, but are never cropped (detected dynamically by the frame class): the frame host keeps fighting a crop.
 - Quitting removes all crops and restores the backdrop and frame.
 
 ## Capabilities
