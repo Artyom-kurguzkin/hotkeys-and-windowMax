@@ -34,6 +34,8 @@ static class Program
     static string stableDisplays = "", pendingDisplays = "";
     static bool settling; // displays changing or machine asleep: window moves are not tracked or reacted to
     static long lastTick;
+    const int CursorCheckTicks = 5; // every 5th 700ms tick (3.5s): are the hand-drawn cursors still in place?
+    static int hoverTicks;
     const uint CropRetryMs = 300; // Snap Layouts re-applies its position after the animation; retry after that
     static readonly HashSet<IntPtr> cropRetries = [];
     static IntPtr prevActive, lastHover;
@@ -299,7 +301,12 @@ static class Program
 
     static void OnTimer(UIntPtr id)
     {
-        if (id == TimerHover) { CheckDisplays(); HoverFocus(); }
+        if (id == TimerHover)
+        {
+            CheckDisplays();
+            HoverFocus();
+            if (++hoverTicks % CursorCheckTicks == 0 && !settling) CursorTheme.EnsureApplied("periodic check");
+        }
         else if (id == TimerSettle) { KillTimer(msgWnd, id); RepairMoveBack(); StartTimer(TimerRepair, RepairDelayMs); }
         else if (id == TimerRepair) { KillTimer(msgWnd, id); RepairRecrop(); }
         else if (id == TimerWatchdog) { if (scroller.InGesture && !AltHeld) StopGesture("watchdog"); }
@@ -777,6 +784,7 @@ static class Program
             RecordLayout(hwnd);
         }
         Log.Info("windows re-cropped, tracking resumed");
+        CursorTheme.EnsureApplied("after wake/display change");
     }
 
     // ---- move between monitors (Copilot key + 1-9) ----

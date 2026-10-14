@@ -6,14 +6,14 @@ The portfolio website (`../portfolio`) uses a hand-drawn yellow arrow over cards
 
 ## What Changes
 
-- While the program runs, Windows' standard arrow and link hand become the website's hand-drawn cursors: same paths, colours (`#ffc94d` fill, `#17171c` outline), hotspots and 40 px size scaled by the display DPI, as the browser draws them.
-- Only those two standard cursors are replaced. Any program that sets its own cursor keeps it: websites with CSS cursors, games, drawing tools. Every other standard cursor (text I-beam, resize, busy) is unchanged, as on the website.
+- While the program runs, Windows' standard arrow and link hand become the website's hand-drawn cursors (same paths, colours `#ffc94d` fill and `#17171c` outline, hotspots, and 40 px size scaled by the display DPI), and the other 12 standard pointers (text I-beam, busy and working spinners, help, precision cross, alternate, unavailable, move, four resize directions) are drawn to match. The busy pointers animate.
+- Only the standard pointers are replaced. Any program that sets its own cursor keeps it: websites with CSS cursors, games, drawing tools.
 - Quitting (or a crash) restores the user's cursor scheme. Nothing is written to the user's settings.
 
 ## Capabilities
 
 ### New Capabilities
-- `cursor-theme`: replacing Windows' standard arrow and hand with the portfolio's hand-drawn cursors, leaving custom cursors alone, and restoring the user's scheme.
+- `cursor-theme`: replacing all of Windows' standard pointers with hand-drawn ones in the portfolio's style, leaving custom cursors alone, and restoring the user's scheme.
 
 ### Modified Capabilities
 

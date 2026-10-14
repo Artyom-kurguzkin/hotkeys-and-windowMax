@@ -664,28 +664,126 @@ public sealed class CropTracker
 }
 
 // The hand-drawn cursors from the portfolio site (../portfolio/src/styles/global.css), drawn natively: same 40x40
-// viewBox, paths, colours and hotspots. Only the standard arrow and hand are replaced (see CursorTheme.cs), so anything
-// that sets its own cursor (a website's CSS cursor, a game) keeps it.
+// viewBox, colours and style. Arrow and Hand are the website's own paths; the other standard pointers are drawn to
+// match (yellow fill, 2px dark outline, faint detail strokes, slightly wobbly lines). Only Windows' *standard* cursors
+// are replaced (see CursorTheme.cs), so anything that sets its own cursor (a website's CSS cursor, a game) keeps it.
 public static class CursorArt
 {
     public const int Size = 40;              // viewBox and CSS size
     public const uint Fill = 0xFFC94D;       // --color-yellow
     public const uint Line = 0x17171C;
     public const double DetailOpacity = 0.55;
+    public const int SpinFrames = 12, SpinJiffies = 4; // busy cursors: 12 frames of 30 deg, 4/60 s each = 0.8 s a turn
 
-    public sealed record Shape(string Outline, string Details, double HotX, double HotY);
+    // Drawn in order. Outline: filled yellow + dark outline (several figures = holes, even-odd). Details: faint strokes.
+    // Marks: full-strength dark strokes (the '?', the busy arc). Spins: rotates about (CX, CY) in animated frames.
+    public sealed record Layer(string Outline, string Details = "", string Marks = "", bool Spins = false, double CX = 20, double CY = 20,
+        double MarkWidth = 2.2);
 
-    public static readonly Shape Arrow = new(
+    // Id: the OCR_* standard cursor it replaces. Rotate: whole drawing turned about the centre (resize arrows reuse
+    // one drawing); only used with a centred hotspot, which rotation leaves in place.
+    public sealed record Shape(string Name, uint Id, Layer[] Layers, double HotX, double HotY, double Rotate = 0)
+    {
+        public bool Animated => Layers.Any(l => l.Spins);
+        public string Outline => Layers[0].Outline;
+        public string Details => Layers[0].Details;
+    }
+
+    static readonly Layer ArrowLayer = new(
         "M4.5 3 Q4 17 5.5 31 Q8.5 27.5 12 24.5 Q15 30.5 18.5 36 Q21 35.2 23.5 33.8 Q20 28 17.2 22.3 Q22.6 22.6 28.5 21.8 Q16 12 4.5 3 Z",
-        "M6 5 Q5.6 17 6.8 28.5 M13 25.8 Q16 31 19 35 M18.5 23.6 Q23 23.4 26.5 22.6",
-        4, 3);
+        "M6 5 Q5.6 17 6.8 28.5 M13 25.8 Q16 31 19 35 M18.5 23.6 Q23 23.4 26.5 22.6");
 
-    public static readonly Shape Hand = new(
+    // website: arrow over cards
+    public static readonly Shape Arrow = new("arrow", 32512, [ArrowLayer], 4, 3);
+
+    // website: pointing hand over anything clickable
+    public static readonly Shape Hand = new("hand", 32649, [new(
         "M13 6.5 Q12.8 3 16 3 Q19.2 3 19 6.5 L19.2 17 Q19.5 14.8 22.2 15 Q25 15.3 25 18 Q25.3 16 28 16.2 Q31 16.5 30.8 19.2 " +
         "Q31.4 17.6 33.6 18 Q36 18.6 35.8 21.5 L35.2 29 Q34.3 36.2 27 37 L19.5 37 Q14.2 36.6 11 32.2 L5.2 24.5 " +
         "Q3.6 21.8 5.6 20.6 Q7.6 19.6 9.6 21.6 L13.2 25.2 Z",
-        "M19.2 17 Q19.4 20 19 22.5 M25 18 Q25.2 20.5 24.8 22.8 M30.8 19.2 Q31 21.2 30.6 23.2 M14.4 7 Q14.2 14 14.6 22",
+        "M19.2 17 Q19.4 20 19 22.5 M25 18 Q25.2 20.5 24.8 22.8 M30.8 19.2 Q31 21.2 30.6 23.2 M14.4 7 Q14.2 14 14.6 22")],
         16, 3);
+
+    // text select: an I-bar with serifs, hotspot in the middle of the stem
+    public static readonly Shape IBeam = new("ibeam", 32513, [new(
+        "M12.8 5.6 Q20 4.6 27.2 5.4 Q27.8 7.4 27.1 9.4 Q24.6 9.1 22.3 9.5 L22.5 30.5 Q24.8 30.9 27.1 30.6 Q27.8 32.6 27.2 34.6 " +
+        "Q20 35.5 12.8 34.5 Q12.2 32.6 12.9 30.6 Q15.3 30.9 17.6 30.5 L17.5 9.5 Q15.2 9.1 12.9 9.4 Q12.2 7.5 12.8 5.6 Z",
+        "M20 11 Q20.3 20 19.9 29")],
+        20, 20);
+
+    // precision select: a plus
+    public static readonly Shape Cross = new("cross", 32515, [new(
+        "M17.8 4 Q20 3.6 22.2 4 L22.1 17.9 L36 17.8 Q36.4 20 36 22.2 L22.1 22.1 L22.2 36 Q20 36.4 17.8 36 L17.9 22.1 " +
+        "L4 22.2 Q3.6 20 4 17.8 L17.9 17.9 Z")],
+        20, 20);
+
+    // alternate select: an up arrow, hotspot at the tip
+    public static readonly Shape Up = new("up", 32516, [new(
+        "M20 3 Q24.6 7.6 29.2 13.2 Q26.2 13.6 23.2 13.3 L23.1 36.2 Q20 36.7 16.9 36.2 L16.8 13.3 Q13.8 13.6 10.8 13.2 Q15.4 7.6 20 3 Z",
+        "M20 9 Q20.3 22 19.9 33")],
+        20, 3);
+
+    // resize: one double arrow, turned for each direction
+    static readonly Layer DoubleArrow = new(
+        "M3 20 L11.6 11.4 Q12.4 14.2 11.9 17 Q20 16.6 28.1 17 Q27.6 14.2 28.4 11.4 L37 20 L28.4 28.6 Q27.6 25.8 28.1 23 " +
+        "Q20 23.4 11.9 23 Q12.4 25.8 11.6 28.6 Z",
+        "M14 20.1 Q20 19.6 26 20");
+    public static readonly Shape SizeWE = new("size-we", 32644, [DoubleArrow], 20, 20);
+    public static readonly Shape SizeNS = new("size-ns", 32645, [DoubleArrow], 20, 20, 90);
+    public static readonly Shape SizeNWSE = new("size-nwse", 32642, [DoubleArrow], 20, 20, 45);
+    public static readonly Shape SizeNESW = new("size-nesw", 32643, [DoubleArrow], 20, 20, -45);
+
+    // move: four-way arrow
+    public static readonly Shape SizeAll = new("move", 32646, [new(
+        "M20 3 L27 10 L22.4 10.1 L22.4 17.6 L29.9 17.6 L30 13 L37 20 L30 27 L29.9 22.4 L22.4 22.4 L22.4 29.9 L27 30 L20 37 " +
+        "L13 30 L17.6 29.9 L17.6 22.4 L10.1 22.4 L10 27 L3 20 L10 13 L10.1 17.6 L17.6 17.6 L17.6 10.1 L13 10 Z",
+        "M20 8 Q20.3 20 20 32 M8 20 Q20 19.7 32 20")],
+        20, 20);
+
+    // unavailable: a ring with a slash across it
+    public static readonly Shape No = new("no", 32648, [
+        new(Circle(20, 20, 15.5) + " " + Circle(20, 20, 10.5)),
+        new("M10.2 14.2 Q18 21.8 25.8 29.8 L29.8 25.8 Q22 18 14.2 10.2 Z")],
+        20, 20);
+
+    // busy: a ring with a dark arc going round
+    public static readonly Shape Wait = new("busy", 32514, [new(
+        Circle(20, 20, 14.5) + " " + Circle(20, 20, 8.5),
+        Marks: "M20 8.5 Q31.3 8.6 31.5 20", Spins: true, MarkWidth: 4.2)],
+        20, 20);
+
+    // working in background: the arrow with a small busy ring at its side
+    public static readonly Shape AppStarting = new("working", 32650, [
+        ArrowLayer,
+        new(Circle(31, 31, 7) + " " + Circle(31, 31, 3.6), Marks: "M31 25.7 Q36.2 25.8 36.3 31", Spins: true, CX: 31, CY: 31)],
+        4, 3);
+
+    // help select: the arrow with a yellow '?' badge
+    public static readonly Shape Help = new("help", 32651, [
+        ArrowLayer,
+        new(Circle(31, 10.5, 7.5), Marks: "M28.4 8.4 Q28.6 5.6 31.2 5.6 Q34 5.7 33.8 8.2 Q33.6 10 31.3 10.8 L31.2 12.4 M31.2 14.9 L31.2 15")],
+        4, 3);
+
+    public static readonly Shape[] All = [Arrow, Hand, IBeam, Cross, Up, SizeWE, SizeNS, SizeNWSE, SizeNESW, SizeAll, No, Wait, AppStarting, Help];
+
+    // A slightly wobbly circle (hand-drawn) as 8 quadratic segments; the parser below reads it like any path.
+    static string Circle(double cx, double cy, double r)
+    {
+        double[] wobble = [0, 0.02, -0.015, 0.012, -0.02, 0.015, 0.005, -0.01];
+        var k = 1 / Math.Cos(Math.PI / 8); // control point radius for a 45-degree quadratic arc
+        string F(double v) => v.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+        (double, double) P(int i, double rr) => (cx + rr * Math.Cos(i * Math.PI / 8), cy + rr * Math.Sin(i * Math.PI / 8));
+        var (x0, y0) = P(0, r);
+        var s = $"M{F(x0)} {F(y0)}";
+        for (var i = 0; i < 8; i++)
+        {
+            var rEnd = r * (1 + wobble[(i + 1) % 8]);
+            var (qx, qy) = P(2 * i + 1, r * k * (1 + (wobble[i] + wobble[(i + 1) % 8]) / 2));
+            var (ex, ey) = P(2 * i + 2, rEnd);
+            s += $" Q{F(qx)} {F(qy)} {F(ex)} {F(ey)}";
+        }
+        return s + " Z";
+    }
 
     // A path as figures of cubic Bézier segments (GDI+ draws cubics; SVG Q/L are converted exactly).
     public readonly record struct Pt(double X, double Y);
@@ -744,5 +842,10 @@ public static class CursorArt
     // The browser draws the 40px cursor at 40 * devicePixelRatio; same here with the display's DPI.
     public static int PixelSize(uint dpi) => Scale(Size, dpi);
     public static (int X, int Y) Hotspot(Shape s, uint dpi) => (Scale(s.HotX, dpi), Scale(s.HotY, dpi));
+    // The system's current standard arrow is ours if it has our size and hotspot (Windows' own arrow has its hotspot
+    // at the very tip, 0,0, and a different size).
+    public static bool IsOurs(int hotX, int hotY, int width, uint dpi) =>
+        (hotX, hotY) == Hotspot(Arrow, dpi) && width == PixelSize(dpi);
+
     static int Scale(double v, uint dpi) => (int)Math.Round(v * dpi / 96.0, MidpointRounding.AwayFromZero); // 4.5 -> 5, not 4
 }

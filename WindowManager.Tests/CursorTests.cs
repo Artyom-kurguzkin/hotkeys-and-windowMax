@@ -55,6 +55,75 @@ public class CursorTests
     }
 
     [Fact]
+    public void Every_standard_pointer_is_covered_once()
+    {
+        uint[] standard = [32512, 32513, 32514, 32515, 32516, 32642, 32643, 32644, 32645, 32646, 32648, 32649, 32650, 32651];
+        Assert.Equal(standard.Order(), CursorArt.All.Select(s => s.Id).Order());
+    }
+
+    [Fact]
+    public void Every_pointer_parses_and_renders()
+    {
+        foreach (var s in CursorArt.All)
+        {
+            foreach (var l in s.Layers) { CursorArt.Parse(l.Outline); if (l.Details != "") CursorArt.Parse(l.Details); if (l.Marks != "") CursorArt.Parse(l.Marks); }
+            using var b = CursorTheme.Render(s, 144);
+            Assert.Equal(60, b.Width);
+        }
+    }
+
+    [Fact]
+    public void Rotated_pointers_click_at_the_centre() // rotation is about (20,20), so only a centred hotspot stays right
+        => Assert.All(CursorArt.All.Where(s => s.Rotate != 0), s => Assert.Equal((20.0, 20.0), (s.HotX, s.HotY)));
+
+    [Fact]
+    public void Only_the_busy_pointers_animate() =>
+        Assert.Equal(["busy", "working"], CursorArt.All.Where(s => s.Animated).Select(s => s.Name).Order());
+
+    [Fact]
+    public void Ring_has_a_hole() // two concentric figures, filled even-odd
+    {
+        using var b = CursorTheme.Render(CursorArt.Wait, 96);
+        Assert.Equal(0, b.GetPixel(20, 20).A);                   // centre: transparent
+        Assert.Equal(255, b.GetPixel(20, 31).A);                 // on the band: drawn
+    }
+
+    [Fact]
+    public void Cur_file_has_cursor_header_and_hotspot()
+    {
+        using var b = CursorTheme.Render(CursorArt.Arrow, 96);
+        var cur = CursorFile.Cur(b, 4, 3);
+        Assert.Equal(2, BitConverter.ToUInt16(cur, 2));          // type: cursor
+        Assert.Equal(40, cur[6]);                                 // width
+        Assert.Equal((4, 3), (BitConverter.ToUInt16(cur, 10), BitConverter.ToUInt16(cur, 12)));
+        Assert.Equal(80, BitConverter.ToInt32(cur, 22 + 8));     // DIB height = image + mask
+        Assert.Equal(cur.Length - 22, BitConverter.ToInt32(cur, 14)); // declared image size matches
+    }
+
+    [Fact]
+    public void Ani_file_is_a_riff_acon_with_every_frame()
+    {
+        var frames = Enumerable.Range(0, 3).Select(i => CursorTheme.Render(CursorArt.Wait, 96, i * 30)).ToList();
+        var ani = CursorFile.Ani(frames, 20, 20, 4);
+        string Tag(int at) => System.Text.Encoding.ASCII.GetString(ani, at, 4);
+        Assert.Equal(("RIFF", "ACON", "anih"), (Tag(0), Tag(8), Tag(12)));
+        Assert.Equal(ani.Length - 8, BitConverter.ToInt32(ani, 4)); // RIFF size
+        Assert.Equal(3, BitConverter.ToInt32(ani, 20 + 4));          // anih: frames
+        Assert.Equal(4, BitConverter.ToInt32(ani, 20 + 28));         // anih: rate in jiffies
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(System.Text.Encoding.ASCII.GetString(ani), "icon").Count);
+        frames.ForEach(f => f.Dispose());
+    }
+
+    [Fact]
+    public void Our_arrow_is_recognised() => Assert.True(CursorArt.IsOurs(6, 5, 60, 144));
+
+    [Theory]
+    [InlineData(0, 0, 48)]  // Windows' own arrow at 150%: hotspot at the tip
+    [InlineData(0, 0, 60)]  // a scheme cursor that happens to be the same size
+    [InlineData(6, 5, 40)]  // ours, but rendered for another DPI
+    public void Reset_arrow_is_detected(int hotX, int hotY, int width) => Assert.False(CursorArt.IsOurs(hotX, hotY, width, 144));
+
+    [Fact]
     public void Rendered_arrow_is_yellow_inside_and_transparent_outside()
     {
         using var bmp = CursorTheme.Render(CursorArt.Arrow, 96);
