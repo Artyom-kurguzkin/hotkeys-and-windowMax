@@ -66,6 +66,8 @@ Strip heights measured with `PrintWindow`, in pixels at 144 DPI: Edge tab strip 
 - **Reveal and quit** both call `Uncrop`: remove the region and move the window to its slot with the same flags.
 - **Manage UWP frames, but never crop them.** `Chrome.IsManageable` also accepts class `ApplicationFrameWindow` despite `WS_POPUP`. `Crop.ShouldCrop` then refuses to crop it (found in use: Settings kept re-adding its caption and fighting the crop). Detection is by the frame class rather than package identity on purpose: package identity would also catch packaged Win32 apps such as new Outlook, whose crop was measured and works (user decision).
 
+- **Close side slivers too (found in use).** Maximized VS Code had uneven invisible borders, 13 px left and 11 px right, so its content started at x=2 and showed a 2 px strip of wallpaper on the left. `Crop.MaximizedVisible` now fills any 1–4 px gap on the left, right or bottom; the top is the crop's job. Content that goes *past* an edge (new Outlook, 1 px each side) is left alone. Verified live: VS Code re-cropped to exactly the monitor, (0,0)-(1920,1200).
+
 ## Risks / Trade-offs
 
 - [Windows' restore position is stored as our cropped rect] → `CropTracker`'s history recognizes it. The worst case is one extra crop step, which is visible in the log.

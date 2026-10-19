@@ -127,7 +127,8 @@ public class AltGestureTests
         var text = string.Join("\n", KeyEngine.Help.Select(h => h.Keys));
         foreach (var b in KeyEngine.Bindings)
         {
-            var key = b.Vk switch { Vk.OemOpen => "[", Vk.OemClose => "]", Vk.PgUp => "PageUp", Vk.PgDn => "PageDown", _ => ((char)b.Vk).ToString() };
+            var key = b.Vk switch { Vk.OemOpen => "[", Vk.OemClose => "]", Vk.PgUp => "PageUp", Vk.PgDn => "PageDown",
+                Vk.Left => "Left", Vk.Right => "Right", Vk.Up => "Up", Vk.Down => "Down", _ => ((char)b.Vk).ToString() };
             Assert.Contains(key, text);
         }
         Assert.Contains("Win+Alt+X", text);

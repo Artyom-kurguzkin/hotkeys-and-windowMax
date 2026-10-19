@@ -65,6 +65,19 @@ public static class Native
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr GetModuleHandle(string? name);
 
+    // Monitor-lie: inject monlie.dll everywhere via a system-wide WH_GETMESSAGE hook whose proc lives IN the DLL
+    // (so a function-pointer install, not a managed delegate), plus a per-process shared slot it reads.
+    public const int WH_GETMESSAGE = 3;
+    public const uint PAGE_READWRITE = 0x04, FILE_MAP_WRITE = 0x0002;
+    public static readonly IntPtr INVALID_HANDLE_VALUE = new(-1);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern IntPtr LoadLibrary(string path);
+    [DllImport("kernel32.dll", CharSet = CharSet.Ansi, SetLastError = true, ExactSpelling = true)] public static extern IntPtr GetProcAddress(IntPtr mod, string name);
+    [DllImport("user32.dll", EntryPoint = "SetWindowsHookExW", SetLastError = true)] public static extern IntPtr SetWindowsHookExPtr(int idHook, IntPtr fn, IntPtr hMod, uint threadId);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern IntPtr CreateFileMapping(IntPtr hFile, IntPtr attrs, uint protect, uint maxHigh, uint maxLow, string name);
+    [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr MapViewOfFile(IntPtr hMap, uint access, uint offHigh, uint offLow, UIntPtr bytes);
+    [DllImport("kernel32.dll", SetLastError = true)] public static extern bool UnmapViewOfFile(IntPtr view);
+    [DllImport("kernel32.dll", SetLastError = true)] public static extern bool CloseHandle(IntPtr h);
+
     // Timers, focus, cursor
     public const int WM_TIMER = 0x0113, WM_INPUT = 0x00FF;
 
@@ -98,13 +111,15 @@ public static class Native
     public const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOZORDER = 0x4, SWP_NOACTIVATE = 0x10, SWP_FRAMECHANGED = 0x20,
         SWP_NOOWNERZORDER = 0x200, SWP_ASYNCWINDOWPOS = 0x4000;
     public const uint EVENT_OBJECT_DESTROY = 0x8001, EVENT_OBJECT_SHOW = 0x8002, EVENT_OBJECT_LOCATIONCHANGE = 0x800B;
+    public const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+    public const uint WM_DISPLAYCHANGE = 0x007E;
     public const uint WINEVENT_OUTOFCONTEXT = 0, WINEVENT_SKIPOWNPROCESS = 2;
     public const int OBJID_WINDOW = 0;
     public const uint MONITOR_DEFAULTTONEAREST = 2;
     public const int DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWA_BORDER_COLOR = 34;
     public const uint DWMWA_COLOR_DEFAULT = 0xFFFFFFFF, DWMWA_COLOR_NONE = 0xFFFFFFFE;
     public const uint DWMWCP_DEFAULT = 0, DWMWCP_DONOTROUND = 1;
-    public const int SW_RESTORE = 9, SW_MAXIMIZE = 3;
+    public const int SW_RESTORE = 9, SW_MAXIMIZE = 3, SW_MINIMIZE = 6;
 
     [StructLayout(LayoutKind.Sequential)] public struct MONITORINFO { public int cbSize; public Rect rcMonitor, rcWork; public uint dwFlags; }
 

@@ -26,6 +26,7 @@
 - [x] 4.7 Close Chromium's 2 px bottom sliver on maximized windows (`Crop.MaximizedVisible`)
 - [x] 4.8 Remove the crop-tuning hotkey (user request); crop heights change only via `crop.json`
 - [x] 4.9 Never crop UWP frames (`Crop.ShouldCrop`, by frame class; packaged Win32 apps still cropped); add unit tests, and verify live that Calculator is stripped but gets no crop
+- [x] 4.10 Close small gaps on the left and right of maximized windows too (VS Code: content from x=2); add unit tests with the measured numbers and verify live that VS Code covers the monitor exactly
 
 ## 5. Manual checks
 

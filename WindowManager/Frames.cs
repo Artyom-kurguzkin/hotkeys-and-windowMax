@@ -88,6 +88,14 @@ public static class Frames
     public static void Move(IntPtr hwnd, Rect r) =>
         SetWindowPos(hwnd, IntPtr.Zero, r.Left, r.Top, r.Width, r.Height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS);
 
+    // The one way to put a window's VISIBLE rectangle exactly on target (invisible resize borders hang off the edge,
+    // like Windows' own snap), so a bordered window never leaves a gap against a borderless/fullscreen neighbour.
+    public static void PlaceVisible(IntPtr hwnd, Rect target)
+    {
+        if (GetWindowRect(hwnd, out var window) && FrameBounds(hwnd) is { } frame) target = LieLogic.AlignVisible(window, frame, target);
+        Move(hwnd, target);
+    }
+
     // SWP_NOSENDCHANGING skips the app's WM_WINDOWPOSCHANGING, which is where both the max-track-size clamp and
     // Chromium's "a maximized window stays at its maximized rect" enforcement happen. Needed to stretch the window
     // above its slot; measured in the add-chrome-crop spike.

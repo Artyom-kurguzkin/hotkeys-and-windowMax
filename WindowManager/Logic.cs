@@ -26,6 +26,7 @@ public enum Act
     WheelDown, WheelUp, WheelLeft, WheelRight, Quit,
     Close, ToggleMaximize, Minimize, ToggleChrome,
     ToggleReveal, SnapLayouts, MoveToMonitor, HighlightWindow, ShowHelp,
+    SnapLeft, SnapRight, SnapUp, SnapDown,
 }
 
 public readonly record struct KeyStroke(int Vk, bool Up);
@@ -64,6 +65,13 @@ public sealed class KeyEngine
         new(Mod.Alt, 'N', Act.Minimize),
         new(Mod.Alt, 'T', Act.ToggleChrome),
         new(Mod.Win | Mod.Alt, 'X', Act.Close), // same as Alt+F4
+        // Win+Arrow tiling: intercepted so a fullscreen app is dropped out of fullscreen first, snapped by Windows,
+        // then re-fullscreened into the new slot (a fullscreen window has no resize frame for Windows to snap).
+        new(Mod.Win, Vk.Left, Act.SnapLeft),
+        new(Mod.Win, Vk.Right, Act.SnapRight),
+        new(Mod.Win, Vk.Up, Act.SnapUp),
+        new(Mod.Win, Vk.Down, Act.SnapDown),
+        new(Mod.Win, 'Z', Act.SnapLayouts), // Snap Layouts: drop fullscreen, show Windows' picker, re-enter on the pick
     ];
 
     // Shown by pressing both Alt keys, grouped in this category order and sorted by shortcut within each group.
@@ -77,6 +85,7 @@ public sealed class KeyEngine
         ("Windows", "Alt+T", "Show / hide the active window's title bar"),
         ("Windows", "Win+Alt  (tap)", "Show / hide the active window's cropped tab strip"),
         ("Windows", "Alt, Alt, Alt  (quickly)", "Flash a border around the active window"),
+        ("Monitors & tiling", "Win+Left / Right / Up / Down", "Tile / maximize the active window"),
         ("Monitors & tiling", "Ctrl+Win+Alt  (tap)", "Snap Layouts: tile the active window"),
         ("Monitors & tiling", "Copilot+1…9  or  Win+Alt+1…9", "Move the active window to monitor 1…9"),
         ("Monitors & tiling", "PageUp / PageDown", "Previous / next virtual desktop"),
@@ -523,14 +532,20 @@ public static class Crop
                   visible.Right + (window.Right - client.Right), visible.Bottom + (window.Bottom - client.Bottom)),
          new Rect(visible.Left, client.Top, visible.Right, visible.Bottom));
 
-    // Maximized Chromium/Electron windows stop their content 1-2px above the monitor bottom when the taskbar
-    // auto-hides (measured: VS Code and Discord client bottom 1198 on a 1200px panel), which shows a sliver of
-    // wallpaper. Returns the rect to fill (content down to the monitor bottom), or null when there's no such gap.
-    public const int MaxBottomGap = 4;
+    // Maximized windows can stop their content a few px short of a monitor edge, showing a sliver of wallpaper:
+    // Chromium/Electron leave 1-2px at the bottom for an auto-hide taskbar (measured: client bottom 1198 on a 1200px
+    // panel), and VS Code's invisible borders are uneven (measured: 13px left, 11px right, so content from x=2).
+    // Returns the rect to fill (content out to each such edge), or null when there's no gap. The top is the crop's job.
+    public const int MaxEdgeGap = 4;
     public static Rect? MaximizedVisible(Rect client, Rect monitor)
     {
-        var gap = monitor.Bottom - client.Bottom;
-        return gap is > 0 and <= MaxBottomGap ? client with { Bottom = monitor.Bottom } : null;
+        static bool Sliver(int gap) => gap is > 0 and <= MaxEdgeGap;
+        var fill = new Rect(
+            Sliver(client.Left - monitor.Left) ? monitor.Left : client.Left,
+            client.Top,
+            Sliver(monitor.Right - client.Right) ? monitor.Right : client.Right,
+            Sliver(monitor.Bottom - client.Bottom) ? monitor.Bottom : client.Bottom);
+        return fill == client ? null : fill;
     }
 
     public static int VisibleBar(int n, Rect slotClient, int monitorTop) =>

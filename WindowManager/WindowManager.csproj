@@ -13,4 +13,11 @@
     <SelfContained>false</SelfContained>
   </PropertyGroup>
 
+  <!-- The injected monitor-lie DLL (built by native/build-native.ps1, committed as a binary)
+       ships beside the exe; a normal build/publish needs no C compiler. -->
+  <Target Name="CopyMonlieDll" AfterTargets="Build;Publish" Condition="Exists('native\monlie.dll')">
+    <Copy SourceFiles="native\monlie.dll" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="native\monlie.dll" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" Condition="'$(PublishDir)' != ''" />
+  </Target>
+
 </Project>

@@ -26,7 +26,7 @@ static class Program
 
     const uint HoverIntervalMs = 700, AltSettleMs = 50, WatchdogMs = 30;
     static readonly UIntPtr TimerHover = 1, TimerAltReleased = 2, TimerWatchdog = 3, TimerCropRetry = 4, TimerHighlight = 5,
-        TimerSettle = 6, TimerRepair = 7;
+        TimerSettle = 6, TimerRepair = 7, TimerZone = 8;
 
     // Sleep / display changes (see Layout in Logic.cs)
     const uint RepairDelayMs = 500; // after moving windows back, let them land before re-cropping
@@ -48,8 +48,20 @@ static class Program
 
     static bool AltHeld => keys.Mods.HasFlag(Mod.Alt);
 
+    // Monitor-lie: new model (apps go into their own fullscreen inside a slot we lie about) replacing the strip/crop
+    // subsystem. UseLie gates the whole new path; crop stays compiled as a fallback until the lie is proven live.
+    static readonly bool UseLie = true;
+    static bool lieOn;                                              // the injected hook is installed
+    static readonly HashSet<IntPtr> lie = [];                       // windows currently fullscreen into their slot
+    static readonly HashSet<string> notCapable = new(StringComparer.OrdinalIgnoreCase); // processes whose F11 didn't fill a slot
+    static readonly HashSet<string> capable = new(StringComparer.OrdinalIgnoreCase);     // processes whose F11 did (skip the slow probe)
+    static readonly System.Collections.Concurrent.ConcurrentQueue<(IntPtr Hwnd, uint Pid, string Proc, bool Ok, bool Probed)> lieResults = [];
+    static readonly Dictionary<IntPtr, Rect> lieSlot = []; // last slot written per window (skip redundant re-sizes)
+
     // Window changes run off the keyboard hook callback (Windows drops hooks that take too long).
-    const uint WM_APP_TOGGLE_CHROME = 0x8001, WM_APP_TOGGLE_REVEAL = 0x8002, WM_APP_MOVED = 0x8004, WM_APP_MOVE_MONITOR = 0x8005, WM_APP_HIGHLIGHT = 0x8006;
+    const uint WM_APP_TOGGLE_CHROME = 0x8001, WM_APP_TOGGLE_REVEAL = 0x8002, WM_APP_MOVED = 0x8004, WM_APP_MOVE_MONITOR = 0x8005, WM_APP_HIGHLIGHT = 0x8006, WM_APP_LIE_RESULT = 0x8007, WM_APP_SNAP = 0x8008, WM_APP_LAYOUTS = 0x800A;
+    static readonly Dictionary<IntPtr, long> awaitingZone = []; // windows dropped out of fullscreen, waiting for a Snap Layouts pick
+    const uint ZoneWaitMs = 10000; // give up waiting for a pick (user cancelled) after this and restore fullscreen
     static readonly HashSet<IntPtr> movedWindows = []; // managed windows with a pending location change
     static readonly Dictionary<IntPtr, CropTracker> crops = [];  // self-drawn title bar windows
     static readonly Dictionary<IntPtr, uint> backdrops = [];     // original backdrop of windows we turned it off for
@@ -73,6 +85,7 @@ static class Program
         LoadCropOverrides();
         if (args.Contains("--dump")) { Dump(); return 0; }
         if (args.Contains("--hotkeys")) { HelpWindow.ShowAndWait(); return 0; } // the list on its own, no hooks
+        if (args.Contains("--lie-test")) { LieTest(args); return 0; }  // exercise the monitor-lie engine on one window
 
         ReplaceRunningInstances();
         RecoverFromDeadInstance();
@@ -99,10 +112,15 @@ static class Program
             if (mouseHook == IntPtr.Zero) Log.Win32("SetWindowsHookEx(WH_MOUSE_LL)");
         }
 
+        if (UseLie) lieOn = MonitorLie.Install();
+
         winEventProc = OnWinEvent;
         var showHook = SetWinEventHook(EVENT_OBJECT_DESTROY, EVENT_OBJECT_SHOW, IntPtr.Zero, winEventProc, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
         var moveHook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, IntPtr.Zero, winEventProc, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
-        if (showHook == IntPtr.Zero || moveHook == IntPtr.Zero) Log.Info("SetWinEventHook failed: new windows won't be stripped");
+        // Foreground changes: a window not yet fullscreened enters its slot when the user first activates it, so we
+        // never mass-steal focus at startup (F11 only reaches the foreground window).
+        var fgHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, winEventProc, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+        if (showHook == IntPtr.Zero || moveHook == IntPtr.Zero) Log.Info("SetWinEventHook failed: new windows won't be managed");
         EnumWindows((hwnd, _) => { Manage(hwnd); return true; }, IntPtr.Zero);
 
         stableDisplays = pendingDisplays = Layout.Signature(Displays());
@@ -119,9 +137,11 @@ static class Program
 
         UnhookWinEvent(showHook);
         UnhookWinEvent(moveHook);
+        if (fgHook != IntPtr.Zero) UnhookWinEvent(fgHook);
         UnhookWindowsHookEx(hook);
         if (mouseHook != IntPtr.Zero) UnhookWindowsHookEx(mouseHook);
         RestoreAll();
+        if (lieOn) MonitorLie.Uninstall();
         CursorTheme.Restore();
         State.Delete(State.DefaultPath); // clean exit: nothing left for a successor to undo
         Log.Info("shutdown");
@@ -195,6 +215,9 @@ static class Program
                     case WM_APP_MOVED: HandleMovedWindows(); break;
                     case WM_APP_MOVE_MONITOR: MoveToMonitor(GetForegroundWindow(), (int)wParam); break;
                     case WM_APP_HIGHLIGHT: Highlight(GetForegroundWindow()); break;
+                    case WM_APP_LIE_RESULT: HandleLieResults(); break;
+                    case WM_APP_SNAP: SnapTile(GetForegroundWindow(), (int)wParam); break;
+                    case WM_APP_LAYOUTS: OpenLayouts(GetForegroundWindow()); break;
                     case WM_POWERBROADCAST: OnPower((int)wParam); break;
                 }
             }
@@ -255,6 +278,13 @@ static class Program
             case Act.MoveToMonitor:
                 PostMessage(msgWnd, WM_APP_MOVE_MONITOR, arg, IntPtr.Zero);
                 break;
+            case Act.SnapLeft or Act.SnapRight or Act.SnapUp or Act.SnapDown:
+                var dir = act switch { Act.SnapLeft => Vk.Left, Act.SnapRight => Vk.Right, Act.SnapUp => Vk.Up, _ => Vk.Down };
+                PostMessage(msgWnd, WM_APP_SNAP, (IntPtr)dir, IntPtr.Zero);
+                break;
+            case Act.SnapLayouts:
+                PostMessage(msgWnd, WM_APP_LAYOUTS, IntPtr.Zero, IntPtr.Zero);
+                break;
             case Act.HighlightWindow:
                 PostMessage(msgWnd, WM_APP_HIGHLIGHT, IntPtr.Zero, IntPtr.Zero);
                 break;
@@ -307,6 +337,7 @@ static class Program
             HoverFocus();
             if (++hoverTicks % CursorCheckTicks == 0 && !settling) CursorTheme.EnsureApplied("periodic check");
         }
+        else if (id == TimerZone) { KillTimer(msgWnd, id); foreach (var hwnd in awaitingZone.Keys.ToArray()) if (Environment.TickCount64 > awaitingZone[hwnd]) ResolveZone(hwnd); }
         else if (id == TimerSettle) { KillTimer(msgWnd, id); RepairMoveBack(); StartTimer(TimerRepair, RepairDelayMs); }
         else if (id == TimerRepair) { KillTimer(msgWnd, id); RepairRecrop(); }
         else if (id == TimerWatchdog) { if (scroller.InGesture && !AltHeld) StopGesture("watchdog"); }
@@ -390,6 +421,15 @@ static class Program
         if (!Chrome.IsManageable(style, Frames.ExStyle(hwnd), cls, ProcessName(hwnd))) return;
         if (IsIconic(hwnd)) return; // classification needs real geometry; picked up on its next location change
 
+        if (UseLie)
+        {
+            managed[hwnd] = style;
+            Log.Info($"manage {Describe(hwnd)} class={cls} style=0x{style:X8}");
+            RecordLayout(hwnd);
+            MaybeEnterLie(hwnd); // only if it's the foreground window; otherwise on its next activation
+            return;
+        }
+
         // Classify before stripping: once WS_CAPTION is gone every window would look self-drawn.
         GetWindowRect(hwnd, out var window);
         var dpi = GetDpiForWindow(hwnd);
@@ -409,6 +449,201 @@ static class Program
         RecordLayout(hwnd);
     }
 
+    // ---- monitor lie ----
+
+    // Put a managed window into its slot, but only when it's the foreground window (F11 reaches only the foreground).
+    static void MaybeEnterLie(IntPtr hwnd)
+    {
+        if (!lieOn || settling || !managed.ContainsKey(hwnd) || IsIconic(hwnd)) return;
+        if (lie.Contains(hwnd) || revealed.Contains(hwnd) || userShown.Contains(hwnd)) return;
+        if (notCapable.Contains(ProcessName(hwnd))) return; // app has no usable fullscreen; left with its own chrome
+        if (GetForegroundWindow() != hwnd) return;          // wait until the user activates it
+        EnterLie(hwnd);
+    }
+
+    // The slot an app should fullscreen into = exactly what the user sees it occupying: the whole monitor when
+    // maximized, otherwise its VISIBLE frame (not the window rect, which includes invisible borders).
+    static Rect SlotOf(IntPtr hwnd, out uint pid)
+    {
+        GetWindowThreadProcessId(hwnd, out pid);
+        if (IsZoomed(hwnd)) return Frames.MonitorRect(hwnd);
+        GetWindowRect(hwnd, out var window);
+        return Frames.FrameBounds(hwnd) ?? window;
+    }
+
+    static void EnterLie(IntPtr hwnd)
+    {
+        var proc = ProcessName(hwnd);
+        var slot = SlotOf(hwnd, out var pid);
+        MonitorLie.SetSlot(pid, slot, true);
+        lieSlot[hwnd] = slot;
+        lie.Add(hwnd); // optimistic: a failed probe takes it back out in HandleLieResults
+        var probe = !capable.Contains(proc);
+        Log.Info($"lie enter {Describe(hwnd)} slot={slot}{(probe ? " (probe)" : "")}");
+        // Off the message loop (TryFullscreen sleeps ~1.5s): the input-sender thread serialises it with other SendInput.
+        Inject(() =>
+        {
+            bool ok;
+            if (probe) ok = MonitorLie.TryFullscreen(hwnd, slot);
+            else { SetForegroundWindow(hwnd); Thread.Sleep(60); MonitorLie.SendF11(); ok = true; }
+            lieResults.Enqueue((hwnd, pid, proc, ok, probe));
+            PostMessage(msgWnd, WM_APP_LIE_RESULT, IntPtr.Zero, IntPtr.Zero);
+        });
+    }
+
+    static void HandleLieResults()
+    {
+        while (lieResults.TryDequeue(out var r))
+        {
+            if (r.Ok) { capable.Add(r.Proc); Log.Info($"lie ok {Describe(r.Hwnd)} ({r.Proc})"); }
+            else
+            {
+                lie.Remove(r.Hwnd);
+                lieSlot.Remove(r.Hwnd);
+                if (r.Probed) { notCapable.Add(r.Proc); MonitorLie.Disable(r.Pid); Log.Info($"lie not-capable {r.Proc}: F11 did not fill the slot, leaving its chrome"); }
+            }
+        }
+    }
+
+    // A fullscreen window moved (snap / maximize toggle / monitor move): give it the new slot and have it re-read,
+    // which re-sizes it in place without leaving fullscreen. Skips when the slot is unchanged (our own echo).
+    static void UpdateLieSlot(IntPtr hwnd, bool force = false)
+    {
+        if (!lie.Contains(hwnd) || !IsWindow(hwnd) || IsIconic(hwnd)) return;
+        var slot = SlotOf(hwnd, out var pid);
+        if (!force && lieSlot.TryGetValue(hwnd, out var last) && last == slot) return;
+        lieSlot[hwnd] = slot;
+        MonitorLie.SetSlot(pid, slot, true);
+        PostMessage(hwnd, WM_DISPLAYCHANGE, IntPtr.Zero, IntPtr.Zero);
+        Log.Info($"lie reslot {Describe(hwnd)} -> {slot}");
+    }
+
+    // Win+Alt / Alt+T: toggle the active window's own fullscreen so its chrome shows, then hides again.
+    static void ToggleRevealLie(IntPtr hwnd)
+    {
+        if (!managed.ContainsKey(hwnd) || notCapable.Contains(ProcessName(hwnd))) { Log.Info($"reveal: {Describe(hwnd)} not lie-managed"); return; }
+        GetWindowThreadProcessId(hwnd, out var pid);
+        if (lie.Remove(hwnd))
+        {
+            revealed.Add(hwnd);
+            lieSlot.Remove(hwnd);
+            MonitorLie.Disable(pid); // a manual F11 now uses the real monitor
+            Inject(() => { SetForegroundWindow(hwnd); Thread.Sleep(60); MonitorLie.SendF11(); });
+            Log.Info($"reveal {Describe(hwnd)}: exit fullscreen, chrome shown");
+        }
+        else { revealed.Remove(hwnd); EnterLie(hwnd); }
+    }
+
+    // After wake / display change: re-push each fullscreen window's STORED slot (which may be a tiled half), not a
+    // recomputed one, so a Win+Left/Right tile survives the wake.
+    static void ReassertLie()
+    {
+        foreach (var hwnd in lie.ToArray())
+        {
+            if (!IsWindow(hwnd) || IsIconic(hwnd) || !lieSlot.TryGetValue(hwnd, out var slot)) continue;
+            GetWindowThreadProcessId(hwnd, out var pid);
+            MonitorLie.SetSlot(pid, slot, true);
+            PostMessage(hwnd, WM_DISPLAYCHANGE, IntPtr.Zero, IntPtr.Zero);
+        }
+    }
+
+    // Shutdown: synchronous (the background sender thread may not drain before the process exits), so every app
+    // actually leaves fullscreen and gets its chrome back. Runs on the message-loop thread, not a hook callback.
+    static void ExitAllLie()
+    {
+        foreach (var hwnd in lie.ToArray())
+        {
+            if (!IsWindow(hwnd)) continue;
+            GetWindowThreadProcessId(hwnd, out var pid);
+            MonitorLie.Disable(pid);
+            SetForegroundWindow(hwnd);
+            Thread.Sleep(80);
+            MonitorLie.SendF11();
+            Thread.Sleep(120);
+        }
+        lie.Clear();
+        lieSlot.Clear();
+    }
+
+    // Win+Arrow tiling. A fullscreen app can't be snapped by Windows (no resize frame) and injecting Win+Arrow while
+    // the user still holds Win mis-fires (opened the Game Bar). Instead: for a lie-fullscreen window just change the
+    // slot it believes is its monitor to the left/right half (or full monitor) and have it re-read - it resizes into
+    // that region, still borderless, no key injection. Normal windows are positioned directly.
+    static void SnapTile(IntPtr hwnd, int vk)
+    {
+        if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return;
+        var fullscreen = UseLie && lie.Contains(hwnd);
+        if (vk == Vk.Down) // minimize
+        {
+            if (fullscreen) { GetWindowThreadProcessId(hwnd, out var pid0); lie.Remove(hwnd); lieSlot.Remove(hwnd); MonitorLie.Disable(pid0); }
+            ShowWindow(hwnd, SW_MINIMIZE);
+            Log.Info($"snap {Describe(hwnd)} minimize");
+            return;
+        }
+        // Fullscreen covers the whole monitor (taskbar included), so tile within the monitor bounds; a normal window
+        // tiles within the work area so it doesn't cover the taskbar.
+        var area = fullscreen ? Frames.MonitorRect(hwnd) : (Frames.MonitorOf(hwnd)?.Work ?? Frames.MonitorRect(hwnd));
+        var slot = vk switch { Vk.Left => LieLogic.LeftHalf(area), Vk.Right => LieLogic.RightHalf(area), _ => area };
+        if (fullscreen)
+        {
+            // A Chromium/Electron app reads its fullscreen bounds once, at F11 time, and ignores a later monitor
+            // change, so re-tiling means: set the new slot, then toggle the app's fullscreen off and on (no Win-key
+            // injection - that mis-fired into the Game Bar). The re-enter reads the new slot and fills the half.
+            GetWindowThreadProcessId(hwnd, out var pid);
+            lieSlot[hwnd] = slot;
+            MonitorLie.SetSlot(pid, slot, true);
+            Log.Info($"snap {Describe(hwnd)} -> {slot} (re-fullscreen)");
+            var held = keys.Held; // Win is still physically held from the Win+Arrow chord
+            Inject(() =>
+            {
+                Send(KeyEngine.Lift(held));              // release Win (masked) so the app sees plain F11, not Win+F11
+                SetForegroundWindow(hwnd); Thread.Sleep(60);
+                MonitorLie.SendF11(); Thread.Sleep(350); // leave fullscreen
+                MonitorLie.SendF11();                     // re-enter -> fills the new slot
+                Send(KeyEngine.Restore(held, keys.Held));
+            });
+        }
+        else if (vk == Vk.Up) { ShowWindow(hwnd, SW_MAXIMIZE); Log.Info($"snap {Describe(hwnd)} maximize"); }
+        else { ShowWindow(hwnd, SW_RESTORE); Frames.PlaceVisible(hwnd, slot); Log.Info($"snap {Describe(hwnd)} -> {slot}"); }
+    }
+
+    // Snap Layouts (Win+Z) is interactive - the user picks a zone from Windows' flyout - so we can't compute it.
+    // A fullscreen app can't be snapped, so: drop it out of fullscreen, show the flyout; when Windows snaps it into
+    // the chosen zone (a move to a non-maximized rect) we re-enter fullscreen into that zone. A cancel (no pick)
+    // restores fullscreen via the timer.
+    static void OpenLayouts(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return;
+        var held = keys.Held;
+        if (UseLie && lie.Remove(hwnd))
+        {
+            lieSlot.Remove(hwnd);
+            GetWindowThreadProcessId(hwnd, out var pid);
+            MonitorLie.Disable(pid);
+            awaitingZone[hwnd] = Environment.TickCount64 + ZoneWaitMs;
+            StartTimer(TimerZone, ZoneWaitMs);
+            Log.Info($"snap layouts {Describe(hwnd)}: exit fullscreen, show picker, re-enter on pick");
+            Inject(() =>
+            {
+                Send(KeyEngine.Lift(held));
+                SetForegroundWindow(hwnd); Thread.Sleep(80);
+                MonitorLie.SendF11(); Thread.Sleep(350);    // leave fullscreen
+                ShowWindow(hwnd, SW_MAXIMIZE); Thread.Sleep(150); // force a clean baseline: only a real zone pick is smaller
+                Send(KeyEngine.Tap(Vk.LWin, 'Z'));          // open the Snap Layouts flyout
+                Send(KeyEngine.Restore(held, keys.Held));
+            });
+        }
+        else Inject(() => { Send(KeyEngine.Lift(held)); Send(KeyEngine.Tap(Vk.LWin, 'Z')); Send(KeyEngine.Restore(held, keys.Held)); });
+    }
+
+    // A window waiting for a Snap Layouts pick landed somewhere (or we gave up): re-enter fullscreen into whatever
+    // rect it now occupies (the chosen zone, or the full monitor if the pick was cancelled).
+    static void ResolveZone(IntPtr hwnd)
+    {
+        awaitingZone.Remove(hwnd);
+        if (IsWindow(hwnd) && !IsIconic(hwnd) && managed.ContainsKey(hwnd) && !notCapable.Contains(ProcessName(hwnd))) EnterLie(hwnd);
+    }
+
     static void OnWinEvent(IntPtr hook, uint evt, IntPtr hwnd, int idObject, int idChild, uint thread, uint time)
     {
         if (idObject != OBJID_WINDOW || idChild != 0 || hwnd == IntPtr.Zero) return;
@@ -416,9 +651,14 @@ static class Program
         {
             switch (evt)
             {
+                case EVENT_SYSTEM_FOREGROUND:
+                    // A managed window the user just activated: put it into its slot now (deferred from startup).
+                    if (UseLie && managed.ContainsKey(hwnd)) MaybeEnterLie(hwnd);
+                    break;
                 case EVENT_OBJECT_SHOW: Manage(hwnd); break;
                 case EVENT_OBJECT_DESTROY:
                     userShown.Remove(hwnd); coverAttempts.Remove(hwnd); crops.Remove(hwnd); names.Remove(hwnd); backdrops.Remove(hwnd); revealed.Remove(hwnd); layout.Remove(hwnd);
+                    lie.Remove(hwnd); lieSlot.Remove(hwnd); awaitingZone.Remove(hwnd);
                     if (managed.Remove(hwnd)) SaveState();
                     break;
                 case EVENT_OBJECT_LOCATIONCHANGE when !managed.ContainsKey(hwnd):
@@ -446,6 +686,18 @@ static class Program
         {
             movedWindows.Remove(hwnd);
             if (!managed.ContainsKey(hwnd) || !IsWindow(hwnd)) continue;
+            if (UseLie)
+            {
+                // Waiting for a Snap Layouts pick: when Windows has snapped it into a zone (no longer maximized, and
+                // smaller than the monitor), re-enter fullscreen into that zone.
+                if (awaitingZone.ContainsKey(hwnd) && !IsZoomed(hwnd) && Frames.FrameBounds(hwnd) is { } f && f != Frames.MonitorRect(hwnd))
+                    ResolveZone(hwnd);
+                // Otherwise the slot is set explicitly (enter, snap, monitor-move), never recomputed from the window's
+                // own rect here - a fullscreen app reports IsZoomed=true, so recomputing would always snap it back to
+                // the whole monitor and undo a Win+Left/Right tile. Just keep the layout record for sleep/wake.
+                RecordLayout(hwnd);
+                continue;
+            }
             if (Chrome.NeedsRestrip(Frames.Style(hwnd), userShown.Contains(hwnd)))
             {
                 Log.Info($"restrip {Describe(hwnd)} (app restored its caption)");
@@ -557,6 +809,7 @@ static class Program
     // Win+Alt: show or hide the cropped bar of the active window only.
     static void ToggleReveal(IntPtr hwnd)
     {
+        if (UseLie) { ToggleRevealLie(hwnd); return; }
         if (!crops.ContainsKey(hwnd) || userShown.Contains(hwnd)) { Log.Info($"reveal: {Describe(hwnd)} has no cropped bar"); return; }
         if (revealed.Remove(hwnd))
         {
@@ -775,6 +1028,14 @@ static class Program
     static void RepairRecrop()
     {
         settling = false;
+        if (UseLie)
+        {
+            ReassertLie();
+            foreach (var hwnd in managed.Keys.ToArray()) if (IsWindow(hwnd) && !IsIconic(hwnd)) RecordLayout(hwnd);
+            Log.Info("lie slots re-asserted, tracking resumed");
+            CursorTheme.EnsureApplied("after wake/display change");
+            return;
+        }
         foreach (var hwnd in managed.Keys.ToArray())
         {
             if (!IsWindow(hwnd) || IsIconic(hwnd)) continue;
@@ -828,12 +1089,14 @@ static class Program
         SetWindowPos(hwnd, IntPtr.Zero, mapped.Left, mapped.Top, mapped.Width, mapped.Height, SWP_NOZORDER | SWP_NOACTIVATE);
         if (zoomed) ShowWindow(hwnd, SW_MAXIMIZE);
         Log.Info($"move {Describe(hwnd)} to monitor {number} ({target.Device}){(zoomed ? " maximized" : "")}: {rect} -> {mapped}");
+        if (UseLie) UpdateLieSlot(hwnd, force: true); // fullscreen window: re-read the new monitor's slot
     }
 
     // ---- shared ----
 
     static void ToggleChrome(IntPtr hwnd)
     {
+        if (UseLie) { ToggleRevealLie(hwnd); return; }
         if (!managed.TryGetValue(hwnd, out var original)) { Log.Info($"toggle chrome: {Describe(hwnd)} is not managed"); return; }
         if (userShown.Remove(hwnd))
         {
@@ -854,6 +1117,12 @@ static class Program
 
     static void RestoreAll()
     {
+        if (UseLie)
+        {
+            ExitAllLie();
+            Log.Info($"restored {managed.Count} windows (exited fullscreen)");
+            return;
+        }
         foreach (var hwnd in crops.Keys) if (IsWindow(hwnd)) Uncrop(hwnd);
         foreach (var (hwnd, original) in managed)
         {
@@ -870,6 +1139,32 @@ static class Program
         GetWindowThreadProcessId(hwnd, out var pid);
         try { n = Process.GetProcessById((int)pid).ProcessName; } catch (ArgumentException) { n = "?"; }
         return names[hwnd] = n;
+    }
+
+    // Standalone check of the MonitorLie engine against one window; does not touch the managing flow.
+    // Usage: WindowManager.exe --lie-test <hwnd> <L> <T> <R> <B>
+    static void LieTest(string[] args)
+    {
+        var i = Array.IndexOf(args, "--lie-test");
+        var hwnd = (IntPtr)long.Parse(args[i + 1]);
+        var slot = new Rect(int.Parse(args[i + 2]), int.Parse(args[i + 3]), int.Parse(args[i + 4]), int.Parse(args[i + 5]));
+        GetWindowThreadProcessId(hwnd, out var pid);
+        var result = Path.Combine(Path.GetTempPath(), "lie_test_result.txt");
+        if (!MonitorLie.Install()) { File.WriteAllText(result, "install failed\n"); return; }
+        MonitorLie.SetSlot(pid, slot, true);
+        for (var k = 0; k < 12; k++) { PostMessage(hwnd, 0, IntPtr.Zero, IntPtr.Zero); Thread.Sleep(30); } // map the DLL in
+        Thread.Sleep(400);
+        GetWindowRect(hwnd, out var pre);
+        var ok = MonitorLie.TryFullscreen(hwnd, slot);
+        GetWindowRect(hwnd, out var fs);
+        var line = $"pid={pid} PRE={pre} FS={fs} slot={slot} filled={ok}";
+        File.WriteAllText(result, line + "\n");
+        Log.Info($"lie-test {line}");
+        // restore the window and tear down
+        SetForegroundWindow(hwnd); Thread.Sleep(300); MonitorLie.SendF11(); Thread.Sleep(600);
+        MonitorLie.Disable(pid);
+        ShowWindow(hwnd, SW_RESTORE); Thread.Sleep(250); ShowWindow(hwnd, SW_MAXIMIZE); Thread.Sleep(400);
+        MonitorLie.Uninstall();
     }
 
     static void Dump()

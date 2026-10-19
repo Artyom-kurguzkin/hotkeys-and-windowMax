@@ -152,6 +152,27 @@ public class ChromeCropTests
         Assert.Equal(new Rect(0, 0, 1920, 1200), ToScreen(step.Target, step.Region)); // no sliver at the bottom
     }
 
+    // Measured on maximized VS Code: window (-11,-63)-(1931,1213), content (2,-52)-(1920,1200): a 2px gap on the left.
+    [Fact]
+    public void Maximized_window_content_reaches_the_left_edge()
+    {
+        var monitor = new Rect(0, 0, 1920, 1200);
+        var fill = Crop.MaximizedVisible(new Rect(2, -52, 1920, 1200), monitor);
+        Assert.Equal(new Rect(0, -52, 1920, 1200), fill);
+        var (window, client) = Crop.FillVisible(new Rect(-11, -63, 1931, 1213), new Rect(2, -52, 1920, 1200), fill!.Value);
+        Assert.Equal(0, client.Left);    // content now starts at the monitor edge
+        Assert.Equal(-13, window.Left);  // window moved left by the gap, keeping its 13px border off-screen
+        Assert.Equal(1931, window.Right);
+    }
+
+    [Fact]
+    public void Gaps_on_several_edges_are_filled_together() =>
+        Assert.Equal(new Rect(0, 5, 1920, 1200), Crop.MaximizedVisible(new Rect(3, 5, 1917, 1198), new Rect(0, 0, 1920, 1200)));
+
+    [Fact]
+    public void Content_past_the_edge_is_left_alone() // new Outlook: content 1px beyond each side
+        => Assert.Null(Crop.MaximizedVisible(new Rect(-1, -48, 1921, 1201), new Rect(0, 0, 1920, 1200)));
+
     [Theory]
     [InlineData(1200)] // already reaches the bottom
     [InlineData(1190)] // a real layout gap, not the auto-hide sliver

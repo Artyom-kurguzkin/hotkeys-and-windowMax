@@ -1,0 +1,9 @@
+schema: spec-driven
+skip_specs: true
+created: 2026-10-19
+x-rtm:
+  id: 7
+  title: disable xbox popup
+  status: Planned
+  priority: high
+  contributors: [Artyom-kurguzkin]
