@@ -5,36 +5,55 @@ Make every app think its monitor is the slot Windows gave the window. The app's
 own fullscreen (F11) then fills that slot exactly, with its own chrome hidden by
 its own code. No per-app bar heights, no clipping. One universal mechanism.
 
-## KNOWN SIDE EFFECT — Xbox Game Bar keeps appearing (2026-10-19)
-Symptom: the Xbox Game Bar overlay pops up repeatedly during normal use.
+## KNOWN SIDE EFFECT — Xbox / gaming overlays keep popping up (2026-10-19)
+Symptom: Xbox-branded overlays appear repeatedly during normal use - the Xbox Game Bar,
+and (found later) an Xbox-app overlay that launches specifically on Win+Up.
 
-Root cause (confirmed, not our key injection): the lie model drives apps into their
-OWN fullscreen with F11 constantly - on activation, on every Win+Arrow / Win+Z tile,
-and on reveal. Windows' game-detection treats "an app just went fullscreen" as "a game
-launched" and (re)launches GameBar.exe to offer the overlay. Verified in the AppModel
-event log: GameBar, GameBarFTServer, XboxGameBarWidgets and EdgeGameAssist re-started
-seconds after being killed, right as fullscreen toggling happened. Our code never sends
-a Game Bar hotkey (grep: we send F11, Win+Z for Snap Layouts, Ctrl+Win+Arrow for
-desktops - never Win+G), so the trigger is Windows itself, inherent to app-fullscreen.
+### Root cause (confirmed by process trace, NOT our key injection)
+The lie model drives apps into their OWN fullscreen with F11 constantly - on activation,
+on every Win+Arrow / Win+Z tile, and on reveal. Windows' game-detection treats "an app
+just went fullscreen" as "a game launched" and launches whatever gaming overlays are
+installed. Our code never sends a Game Bar hotkey (grep: we send F11, Win+Z for Snap
+Layouts, Ctrl+Win+Arrow for desktops - never Win+G). The trigger is Windows itself,
+inherent to app-fullscreen. The old crop approach never fired it (the window stayed
+un-fullscreen).
 
-Why the settings toggle is not enough: `GameBar\UseNexusForGameBarEnabled=0`,
-`GameConfigStore\GameDVR_Enabled=0`, `CurrentVersion\GameDVR\AppCaptureEnabled=0` only
-hide/stop recording - Windows still RELAUNCHES GameBar.exe on game detection.
+### THERE ARE THREE+ SEPARATE OVERLAYS (this is why removing one didn't fix it)
+1. `Microsoft.XboxGamingOverlay`  -> GameBar.exe, GameBarFTServer, XboxGameBarWidgets (the classic Game Bar)
+2. `Microsoft.Edge.GameAssist`    -> EdgeGameAssist.exe (Edge's own overlay; fires when Edge goes fullscreen)
+3. `Microsoft.GamingApp`          -> XboxPcAppCE (the Xbox APP's compact overlay; this is the one that launched on Win+Up)
+   (also `Microsoft.XboxSpeechToTextOverlay` - another overlay)
 
-Workaround applied (system-level, per-user, no admin, reversible - NOT code):
-- Removed the overlay app:  `Get-AppxPackage Microsoft.XboxGamingOverlay | Remove-AppxPackage`
-  (nothing left to launch; verified no relaunch after repeated fullscreen toggling).
+### How to diagnose which one it is (don't guess - trace it)
+Settings toggles and killing processes DON'T help: Windows relaunches them on detection.
+Run a process monitor and press the triggering key for real (the manager's keyboard hook
+ignores injected keys, so a scripted WM_APP_SNAP does NOT reproduce it - you must press it):
+  scripts/procmon.ps1 logs every NEW process to %LOCALAPPDATA%\Temp\procmon.log.
+  Press Win+Up etc.; the Xbox exe that appears names the package to remove.
+(Win32 game processes seen: GameBar*, EdgeGameAssist*, XboxPcApp*, GamingServices.)
+
+### PERMANENT FIX (applied 2026-10-19, verified; scripts: openspec/changes/add-monitor-lie/scripts/)
+### kill-xbox.ps1 (run elevated) does the admin steps; procmon.ps1 is the diagnostic monitor.
+Per-user (no admin) stops it now; admin makes it survive Windows/Edge updates.
 - No-op protocol handlers in HKCU\Software\Classes for `ms-gamingoverlay`, `ms-gamebar`,
-  `ms-gamebarservices` (shell\open\command -> systray.exe) so any invocation can't raise
-  the "you'll need a new app to open this ms-gamingoverlay link" popup either.
-- Also set the GameDVR/GameBar disable keys above.
-Revert: reinstall "Xbox Game Bar" from the Microsoft Store and delete those HKCU classes keys.
+  `ms-gamebarservices` (shell\open\command -> systray.exe) so nothing raises the
+  "you'll need a new app to open this ms-gamingoverlay link" popup.
+- Per-user: `Get-AppxPackage <name> | Remove-AppxPackage` for the four packages above.
+- Admin (kill-xbox.ps1, run elevated): machine policies
+  `HKLM\SOFTWARE\Policies\Microsoft\Windows\GameDVR\AllowGameDVR=0`,
+  `HKLM\SOFTWARE\Policies\Microsoft\Edge\GameAssistEnabled=0`,
+  plus `Remove-AppxProvisionedPackage -Online` for all four so they don't reinstall.
+  (Removing GamingApp while it is running crashes the remover with 0xC0000006 but the
+  removal still completes - kill XboxPcApp* first, or re-run the per-user Remove-AppxPackage.)
+Verify: `Get-AppxPackage Microsoft.GamingApp` -> nothing; press Win+Up -> no Xbox process.
+Revert: reinstall "Xbox"/"Xbox Game Bar" from the Microsoft Store, delete the HKLM policy
+keys and the HKCU\Software\Classes ms-gamebar* keys.
 
-Implication: this is a general cost of the app-fullscreen approach that the old crop
-approach did NOT have (crop kept the real window un-fullscreen, so game-detection never
-fired). The workaround lives on the machine, not in the window manager; a fresh machine
-running this build would see the Game Bar until the same workaround is applied. If the
-approach is kept, consider shipping this as an opt-in setup step the manager documents.
+### Implication
+This is a standing cost of the app-fullscreen approach and lives on the MACHINE, not in
+the window manager - a fresh machine running this build re-hits it until kill-xbox.ps1 is
+run there. If the fullscreen approach is kept, ship kill-xbox.ps1 as a documented setup
+step. The hybrid (fullscreen only maximized windows, crop the rest) avoids it entirely.
 
 ## Mechanism (the only one that works from outside the app's UI)
 The app learns its monitor size by calling `GetMonitorInfo` / `MonitorFromWindow`
