@@ -87,7 +87,7 @@ public static class Native
     public const uint DEVICE_NOTIFY_WINDOW_HANDLE = 0;
     [DllImport("user32.dll", SetLastError = true)] public static extern IntPtr RegisterSuspendResumeNotification(IntPtr hRecipient, uint flags);
     public const int GWL_STYLE = -16, GWL_EXSTYLE = -20;
-    public const uint GA_ROOT = 2;
+    public const uint GA_ROOT = 2, GA_ROOTOWNER = 3;
 
     [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
 
@@ -155,7 +155,11 @@ public static class Native
     public const uint WS_POPUP_STYLE = 0x80000000;
     public const uint WS_EX_LAYERED = 0x80000, WS_EX_TRANSPARENT = 0x20, WS_EX_TOPMOST = 0x8, WS_EX_TOOLWINDOW_EX = 0x80, WS_EX_NOACTIVATE = 0x08000000;
     public const uint LWA_ALPHA = 0x2, SWP_SHOWWINDOW = 0x40;
-    public static readonly IntPtr HWND_TOPMOST = new(-1);
+    public static readonly IntPtr HWND_TOPMOST = new(-1), HWND_NOTOPMOST = new(-2), HWND_TOP = IntPtr.Zero;
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    [StructLayout(LayoutKind.Sequential)] public struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+    [DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
+    [DllImport("kernel32.dll")] public static extern uint GetTickCount();
     public const uint MB_OK = 0, MB_ICONINFORMATION = 0x40, MB_SETFOREGROUND = 0x10000, MB_TOPMOST = 0x40000;
     [DllImport("dwmapi.dll")] public static extern int DwmGetColorizationColor(out uint argb, out bool opaque);
     [DllImport("gdi32.dll")] public static extern IntPtr CreateSolidBrush(uint colorref);
@@ -176,6 +180,19 @@ public static class Native
     [DllImport("user32.dll", SetLastError = true)] public static extern bool GetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT wp);
     [DllImport("user32.dll", SetLastError = true)] public static extern bool SetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT wp);
     public const uint MONITOR_DEFAULTTOPRIMARY = 1;
+
+    // Hint mode: the per-pixel-alpha badge overlay
+    public const uint ULW_ALPHA = 0x2;
+    public const byte AC_SRC_OVER = 0, AC_SRC_ALPHA = 1;
+    [StructLayout(LayoutKind.Sequential)] public struct SIZE { public int cx, cy; }
+    [StructLayout(LayoutKind.Sequential)] public struct BLENDFUNCTION { public byte BlendOp, BlendFlags, SourceConstantAlpha, AlphaFormat; }
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool UpdateLayeredWindow(IntPtr hWnd, IntPtr hdcDst, ref POINT pptDst, ref SIZE psize, IntPtr hdcSrc, ref POINT pptSrc, uint crKey, ref BLENDFUNCTION pblend, uint dwFlags);
+    [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr hWnd, IntPtr hdc);
+    [DllImport("gdi32.dll")] public static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+    [DllImport("gdi32.dll")] public static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
+    [DllImport("gdi32.dll")] public static extern bool DeleteDC(IntPtr hdc);
 
     // Crop
     public const uint SWP_NOSENDCHANGING = 0x400;

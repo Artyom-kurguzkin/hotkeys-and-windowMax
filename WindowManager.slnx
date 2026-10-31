@@ -1,4 +1,5 @@
 <Solution>
+  <Project Path="WindowManager.Fixture/WmFixture.csproj" />
   <Project Path="WindowManager.Tests/WindowManager.Tests.csproj" />
   <Project Path="WindowManager/WindowManager.csproj" />
 </Solution>

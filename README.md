@@ -72,6 +72,8 @@ Start with the log, not the app.
 - **The TrackPoint isn't found:** the log lists every mouse device at startup. Put the right hardware ID in `TrackPointMatch` in Program.cs (it is currently `LEN0325`).
 - **Windows stay without a title bar after a crash:** start the program again. It repairs what the crashed instance left behind, and Ctrl+Alt+Shift+Q then restores everything.
 - **`dotnet publish` fails because the exe is locked:** an old instance is still running, or is a zombie stuck terminating; those last until reboot. Quit it, or rename `dist\WindowManager.exe` (Windows allows renaming a running exe) and publish again.
+- **Alt+F feels slow:** the labels are scanned ahead of time (see `openspec/changes/add-hint-mode/design.md`, "Prefetch"). `grep "hints:" wm.log` shows whether a press was served from the prefetched scan, waited for one in flight, or scanned from scratch, and how long each scan took per window. `--no-prefetch` disables it.
+- **`dist\monlie.dll` is locked too:** every app the running manager injected keeps it mapped until the manager quits AND the app pumps a message. The csproj moves the locked copy aside (`monlie.<ticks>.old`) and copies the new one; never run a new exe next to an old dll (their shared layout differs: it lies garbage rectangles).
 
 ## How it works
 

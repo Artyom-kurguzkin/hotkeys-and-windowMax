@@ -1,0 +1,8 @@
+schema: spec-driven
+created: 2026-10-31
+x-rtm:
+  id: 11
+  title: better mouse control + custom styling
+  status: In Review
+  contributors: [Artyom-kurguzkin]
+  mergedFrom: [4, 5]

@@ -3,24 +3,35 @@
 // system-wide WH_GETMESSAGE hook installed by WindowManager.exe.
 //
 // Mechanism (the one that proved reliable in the spike): the manager creates a
-// per-process file mapping "Local\monlie_<pid>" holding {enabled, slot}. When enabled,
-// this DLL overwrites every GetMonitorInfo result in that process to the slot. The app
-// then enters its own fullscreen (F11, etc.) and sizes itself to the slot, hiding its
-// own chrome - no frame stripping, no per-app crop heights.
+// per-process file mapping "Local\monlie_<pid>" holding a small table of
+// {monitor handle, enabled, slot}. GetMonitorInfo for a monitor that has an enabled
+// entry returns that entry's slot as the monitor's bounds; every other monitor is
+// reported truthfully. The app then enters its own fullscreen (F11, etc.) and sizes
+// itself to the slot, hiding its own chrome - no frame stripping, no per-app crop heights.
 //
-// Why per-PROCESS and not per-window: an app's fullscreen sizing reads the monitor
-// bounds through the real HMONITOR (verified: a synthetic per-window handle is ignored
-// for sizing). So the lie must come back for the real handle, which is process-wide.
-// Common case (one managed window per process) is exact; the ceiling is several windows
-// of ONE app in DIFFERENT slots at once - they share the process slot. The manager sets
-// the slot to the window it is fullscreening.
+// Why keyed by the REAL monitor handle: an app's fullscreen sizing reads the monitor
+// bounds through the real HMONITOR of the monitor the window is on (verified: a synthetic
+// per-window handle is ignored for sizing; Chromium keeps a display list from
+// EnumDisplayMonitors + GetMonitorInfo and maps a window to it via MonitorFromWindow).
+// So the lie must come back for the real handle. One slot PER MONITOR per process lets
+// several windows of one app live on different monitors in different slots. The first
+// version lied the same slot for every monitor of the process: with VS Code windows on
+// three monitors, Alt+Tab onto one re-slotted them all and they jumped between displays
+// (measured in the real log, 2026-10-31). The remaining ceiling: two windows of ONE app
+// on the SAME monitor in different slots share that monitor's entry - the last one set wins.
 //
 // Build: see build-native.ps1 (mingw-w64 gcc + vendored MinHook).
 #include <windows.h>
 #include <stdio.h>
 #include "MinHook.h"
 
-typedef struct { volatile LONG enabled; RECT slot; } MonLieShared;
+// Layout shared with MonitorLie.cs (MonitorLie.Slots / EntrySize): keep both in step.
+#define MONLIE_SLOTS 8
+typedef struct { LONGLONG monitor; volatile LONG enabled; LONG reserved; RECT slot; } MonLieEntry;
+typedef struct { MonLieEntry e[MONLIE_SLOTS]; } MonLieShared;
+_Static_assert(sizeof(MonLieEntry) == 32, "MonLieEntry must be 32 bytes (MonitorLie.cs assumes it)");
+_Static_assert(sizeof(MonLieShared) == 256, "MonLieShared must be 256 bytes (MonitorLie.cs assumes it)");
+
 static MonLieShared *g_shm;
 static DWORD g_lastTry;
 static BOOL g_ready;
@@ -29,25 +40,30 @@ typedef BOOL (WINAPI *GMI)(HMONITOR, LPMONITORINFO);
 static GMI real_GMIW, real_GMIA;
 
 // Open the per-process mapping lazily: the manager may tag this process AFTER the hook
-// injected us. Retry at most ~every 2s so unmanaged processes don't spin on OpenFileMapping.
+// injected us. Retry every ~300ms (OpenFileMapping on a missing name is cheap) - a 2s
+// throttle lost a race with the manager's probe, which sends F11 ~400ms after SetSlot, so
+// the app fullscreened to the REAL monitor and was wrongly marked not-capable.
 static void ensure_shm(void) {
     if (g_shm) return;
     DWORD now = GetTickCount();
-    if (g_lastTry && now - g_lastTry < 2000) return;
+    if (g_lastTry && now - g_lastTry < 300) return;
     g_lastTry = now;
     char name[64]; sprintf(name, "Local\\monlie_%lu", GetCurrentProcessId());
     HANDLE h = OpenFileMappingA(FILE_MAP_READ, FALSE, name);
     if (h) { g_shm = (MonLieShared*)MapViewOfFile(h, FILE_MAP_READ, 0, 0, sizeof(MonLieShared)); CloseHandle(h); }
 }
 
-static void lie(LPMONITORINFO mi) {
+// Only the monitor with an enabled entry is lied about; its flags (primary or not) stay real.
+static void lie(HMONITOR m, LPMONITORINFO mi) {
     ensure_shm();
-    if (g_shm && g_shm->enabled && mi && mi->cbSize >= sizeof(MONITORINFO)) {
-        mi->rcMonitor = g_shm->slot; mi->rcWork = g_shm->slot; mi->dwFlags = MONITORINFOF_PRIMARY;
+    if (!g_shm || !mi || mi->cbSize < sizeof(MONITORINFO)) return;
+    for (int i = 0; i < MONLIE_SLOTS; i++) {
+        const MonLieEntry *e = &g_shm->e[i];
+        if (e->enabled && (HMONITOR)(ULONG_PTR)e->monitor == m) { mi->rcMonitor = e->slot; mi->rcWork = e->slot; return; }
     }
 }
-static BOOL WINAPI my_GMIW(HMONITOR m, LPMONITORINFO mi) { BOOL r = real_GMIW(m, mi); if (r) lie(mi); return r; }
-static BOOL WINAPI my_GMIA(HMONITOR m, LPMONITORINFO mi) { BOOL r = real_GMIA(m, mi); if (r) lie(mi); return r; }
+static BOOL WINAPI my_GMIW(HMONITOR m, LPMONITORINFO mi) { BOOL r = real_GMIW(m, mi); if (r) lie(m, mi); return r; }
+static BOOL WINAPI my_GMIA(HMONITOR m, LPMONITORINFO mi) { BOOL r = real_GMIA(m, mi); if (r) lie(m, mi); return r; }
 
 // Processes we never touch: the shell and the manager itself.
 static BOOL excluded_host(void) {

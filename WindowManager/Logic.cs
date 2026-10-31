@@ -25,7 +25,7 @@ public enum Act
     None, AppsKey, Click, Esc, End, Home, ShiftEnd, ShiftHome, NewLineBelow, DesktopLeft, DesktopRight,
     WheelDown, WheelUp, WheelLeft, WheelRight, Quit,
     Close, ToggleMaximize, Minimize, ToggleChrome,
-    ToggleReveal, SnapLayouts, MoveToMonitor, HighlightWindow, ShowHelp,
+    ToggleReveal, SnapLayouts, MoveToMonitor, HighlightWindow, ShowHelp, ToggleHints,
     SnapLeft, SnapRight, SnapUp, SnapDown,
 }
 
@@ -64,6 +64,7 @@ public sealed class KeyEngine
         new(Mod.Alt, 'M', Act.ToggleMaximize),
         new(Mod.Alt, 'N', Act.Minimize),
         new(Mod.Alt, 'T', Act.ToggleChrome),
+        new(Mod.Alt, 'F', Act.ToggleHints), // hint mode (see HintEngine)
         new(Mod.Win | Mod.Alt, 'X', Act.Close), // same as Alt+F4
         // Win+Arrow tiling: intercepted so a fullscreen app is dropped out of fullscreen first, snapped by Windows,
         // then re-fullscreened into the new slot (a fullscreen window has no resize frame for Windows to snap).
@@ -83,8 +84,10 @@ public sealed class KeyEngine
         ("Windows", "Alt+M", "Maximize / restore the active window"),
         ("Windows", "Alt+N", "Minimize the active window"),
         ("Windows", "Alt+T", "Show / hide the active window's title bar"),
+        ("Windows", "Alt+F", "Hint mode: a letter on every clickable thing; type it to click, Shift+letter to Shift-click and keep picking; Alt+F or Esc hides"),
         ("Windows", "Win+Alt  (tap)", "Show / hide the active window's cropped tab strip"),
         ("Windows", "Alt, Alt, Alt  (quickly)", "Flash a border around the active window"),
+        ("Windows", "Alt+Tab", "The window you switch to flashes its border for 1.5s"),
         ("Monitors & tiling", "Win+Left / Right / Up / Down", "Tile / maximize the active window"),
         ("Monitors & tiling", "Ctrl+Win+Alt  (tap)", "Snap Layouts: tile the active window"),
         ("Monitors & tiling", "Copilot+1…9  or  Win+Alt+1…9", "Move the active window to monitor 1…9"),
@@ -310,8 +313,11 @@ public static class Focus
     public static bool IsRealWindow(uint style) =>
         (style & WS_VISIBLE) != 0 && (style & WS_OVERLAPPEDWINDOW) != 0 && (style & WS_CHILD) == 0 && (style & WS_POPUP) == 0;
 
-    public static bool ShouldHoverFocus(IntPtr hwnd, IntPtr lastHover, bool altHeld, bool isReal) =>
-        !altHeld && hwnd != IntPtr.Zero && hwnd != lastHover && isReal;
+    // moved: the pointer changed position since the last tick. A window sliding out from under a RESTING pointer
+    // (Win+Right on the foreground: the one behind is now under the mouse) must not take the focus the user just gave
+    // (measured: every scenario after a snap asserted on the wrong window).
+    public static bool ShouldHoverFocus(IntPtr hwnd, IntPtr lastHover, bool altHeld, bool isReal, bool moved = true) =>
+        moved && !altHeld && hwnd != IntPtr.Zero && hwnd != lastHover && isReal;
 
     public static bool ShouldCenter(IntPtr prev, IntPtr now, bool mouseInside) =>
         now != IntPtr.Zero && now != prev && !mouseInside;
@@ -676,6 +682,72 @@ public sealed class CropTracker
         if (history.Count > HistorySize) history.RemoveAt(0);
         return new CropStep(CropKind.Apply, target, region);
     }
+}
+
+// Hint mode, ported from repo-task-manager's app.js `_hints`: F puts a letter badge on every clickable thing on
+// screen; typing a badge's letters picks it; Shift on the completing letter Shift-clicks it and keeps the badges up
+// (pick several in a row); F or Esc hides. Pure: the decisions only. Targets, drawing and clicking live in Hints.cs.
+// When may a scan done earlier be shown now? Pure, so the rule is tested: the same window has the focus, the same windows are on screen
+// in the same order at the same rectangles, and the scan is not old. Anything else (a window moved, a new one appeared, the page may have
+// changed) and the badges would sit on the wrong things, so the caller scans again.
+public static class HintCache
+{
+    public const long MaxAgeMs = 6000;
+
+    public static bool Usable(long ageMs, bool sameForeground, IReadOnlyList<(long Hwnd, Rect Rect)> scanned, IReadOnlyList<(long Hwnd, Rect Rect)> now, long maxAgeMs = MaxAgeMs) =>
+        ageMs >= 0 && ageMs <= maxAgeMs && sameForeground && scanned.Count > 0 && scanned.Count == now.Count && scanned.SequenceEqual(now);
+
+    // Worth a background refresh? The user is working (recent input), nothing is being scanned, and the last scan is older than the interval.
+    public static bool WantsRefresh(long ageMs, long msSinceInput, long everyMs = 3000, long activeWithinMs = 20000) =>
+        msSinceInput <= activeWithinMs && (ageMs < 0 || ageMs >= everyMs);
+
+    // A refreshed scan replaces the badges on screen only if it differs and nothing has been typed yet (letters must not change under the user's fingers).
+    public static bool ShouldRedraw(bool typedNothing, IReadOnlyList<Rect> shown, IReadOnlyList<Rect> fresh) =>
+        typedNothing && !shown.SequenceEqual(fresh);
+}
+
+public sealed class HintEngine
+{
+    public const string Chars = "asdghjklqwertyuiopzxcvbnm"; // no f: F toggles hint mode
+
+    public enum Step { Narrowed, Pick, PickKeep, Reset }
+
+    public bool Active { get; private set; }
+    public string Typed { get; private set; } = "";
+    public IReadOnlyList<string> Labels { get; private set; } = [];
+
+    // Same scheme as the web version: single letters while they last, then pairs whose first letter is the group.
+    public static string[] LabelsFor(int n)
+    {
+        if (n <= Chars.Length) return [.. Chars[..n].Select(c => c.ToString())];
+        var o = new string[n];
+        for (var i = 0; i < n; i++) o[i] = $"{Chars[i / Chars.Length % Chars.Length]}{Chars[i % Chars.Length]}";
+        return o;
+    }
+
+    public void Show(int count) { Active = true; Typed = ""; Labels = LabelsFor(count); }
+    public void Hide() { Active = false; Typed = ""; Labels = []; }
+
+    // A badge is dimmed once the typed prefix rules it out.
+    public bool Dim(string label) => Typed.Length > 0 && !label.StartsWith(Typed, StringComparison.Ordinal);
+
+    // One typed letter. Pick: the index to click (hints are hidden). PickKeep: Shift-pick, badges stay up.
+    // Reset: nothing could match any more, start over. Narrowed: keep going.
+    public (Step Step, int Index) Type(char ch, bool shift)
+    {
+        Typed += char.ToLowerInvariant(ch);
+        var i = IndexOf(Typed);
+        if (i >= 0)
+        {
+            if (shift) { Typed = ""; return (Step.PickKeep, i); }
+            Hide();
+            return (Step.Pick, i);
+        }
+        if (!Labels.Any(l => l.StartsWith(Typed, StringComparison.Ordinal))) { Typed = ""; return (Step.Reset, -1); }
+        return (Step.Narrowed, -1);
+    }
+
+    int IndexOf(string label) { for (var i = 0; i < Labels.Count; i++) if (Labels[i] == label) return i; return -1; }
 }
 
 // The hand-drawn cursors from the portfolio site (../portfolio/src/styles/global.css), drawn natively: same 40x40

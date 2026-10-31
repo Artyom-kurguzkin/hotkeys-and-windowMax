@@ -1,0 +1,91 @@
+# Hint prefetch only. About a minute.
+set quietMs 300
+
+# ====================================================================================================================
+group Hint prefetch (the labels are worked out before Alt+F)
+
+test H9 pressing Alt+F after a pause shows the badges at once from the finished scan
+  require uia
+  normalize std
+  sleep 1200
+  hint-show
+  settle
+  expect-hints min 3
+  expect-metric hints-ms < 80
+  expect-log shown from the (prefetched|just-finished) scan
+  key Esc
+  settle
+
+test H10 pressing Alt+F straight after switching windows still shows them quickly
+  require uia
+  spawnbg A std 100 100 800 600
+  spawnbg B std 300 200 800 600
+  activate A
+  settle
+  activate B
+  hint-show
+  settle
+  expect-hints min 3
+  expect-metric hints-ms < 700
+  key Esc
+  settle
+
+test H11 a scan from before the focused window moved is never shown
+  require uia
+  normalize std
+  sleep 1200
+  key Win+Left
+  hint-show
+  settle
+  expect-hints min 3
+  expect-nolog shown from the prefetched
+  key Esc
+  settle
+
+test H12 two presses in a row both work from the scan
+  require uia
+  normalize std
+  sleep 1200
+  hint-show
+  key Esc
+  settle
+  hint-show
+  settle
+  expect-hints min 3
+  expect-metric hints-ms < 80
+  key Esc
+  settle
+
+test G3 an Alt+Tab switch flashes the window it landed on
+  spawnbg A std 100 100 800 600
+  spawnbg B std 300 200 800 600
+  activate A
+  settle
+  down Alt
+  key Tab
+  activate B
+  up Alt
+  settle
+  expect B fg
+  expect-log alt\+tab landed on
+  expect-log highlight
+
+test G4 a plain Alt chord without Tab does not flash anything
+  normalize std
+  key Alt+J
+  settle
+  expect-nolog alt\+tab landed on
+
+test H13 only the focused window gets badges
+  require uia
+  spawnbg A std 100 100 800 600
+  spawnbg B std 1000 200 800 600
+  activate A
+  settle
+  hint-show
+  settle
+  expect-hints min 3
+  expect-hints max 5
+  key Esc
+  settle
+

@@ -1,0 +1,1229 @@
+# The full sandbox macro. Run it with tests\sandbox.ps1; read tests\out\sandbox\report.md afterwards.
+#
+# One command per line: a verb, then arguments. '#' starts a comment.
+# `for x in a,b,c` ... `endfor` repeats its lines once per value, replacing $x.
+#
+# Windows (fixtures are small apps with their own fullscreen; the mode says how that app behaves):
+#   spawn N mode [x y w h]   start window N and activate it      spawnbg  the same without activating it
+#   activate N | close N | kill N | place N x y w h | maximize N | minimize N | restore N | appf11 N | fixture N hang MS|crash
+#   modes: std (reads the monitor once, like Chromium)  redisplay  nof11  metrics  slow  late  anim
+# Keys go through the manager's real key path:
+#   key Win+Left | down Alt | up Alt | repeat N GAPms CHORD | stress N GAPms CHORD... | type abc | sleep MS
+#   cursor X Y | cursor-on N
+# Waiting and judging:
+#   settle   wait until the manager is idle and nothing has moved for 300ms, then judge everything that happened
+#   expect N lie|!lie|revealed|iconic|zoomed|fg|appfs|notcapable|managed     expect N at left|right|full|workleft|workright|x,y,w,h
+#   ux-expect ...  the same, counted against the quality bar instead of as a defect
+#   expect-tap KEY [n] | expect-wheel down|up|left|right N | expect-click | expect-no-output | expect-clean
+#   expect-log REGEX | expect-nolog REGEX | expect-f11 N | expect-hints active|inactive|min N | expect-clicks N COUNT
+#   expect-metric NAME OP VALUE | expect-emit-latency KIND < MS | expect-cursor-in N | expect-unchanged N
+# Generators: normalize MODE [bystander] | singles MODE a,b,c | pairs MODE a,b,c | walk MODE SEED STEPS a,b,c
+# Every settle also checks, with no expect needed: that each fullscreen window fills its slot, that what the manager believes
+# is what the app believes, that side-by-side tiles meet exactly, that the right window kept the focus, that nothing else
+# moved, that no state leaked, that Alt/Win releases were masked, that nothing is stuck, and that the log has no errors.
+
+set quietMs 300
+
+# ====================================================================================================================
+group Becoming borderless
+
+test A1 a capable app goes borderless in its slot when activated
+  spawnbg A std
+  activate A
+  settle
+  expect A lie
+  expect A appfs
+  expect A fg
+  expect-f11 1
+
+test A1b a maximized window fills the whole monitor
+  spawnbg A std
+  maximize A
+  settle
+  activate A
+  settle
+  expect A lie
+  expect A at full
+
+test A1c a minimized window comes back borderless
+  spawnbg A std
+  minimize A
+  settle
+  activate A
+  settle
+  expect A lie
+  expect A fg
+
+test A1d a window partly off the screen gets an on-screen slot
+  spawnbg A std 1500 700 800 600
+  activate A
+  settle
+  expect A lie
+
+test A1e a tiny window
+  allow-log lie missed
+  allow-log left out
+  spawnbg A std 300 300 140 90
+  activate A
+  settle
+
+test A1f a window bigger than the monitor
+  spawnbg A std -200 -150 2600 1700
+  activate A
+  settle
+  expect A lie
+
+test A1g a window left entirely off the screen
+  spawnbg A std 3200 100 800 600
+  activate A
+  settle
+  expect A lie
+
+test A1h activating a fullscreen window again does nothing
+  spawnbg A std
+  activate A
+  settle
+  activate A
+  settle
+  expect-f11 0
+  expect-unchanged A
+
+test A2 an app with no fullscreen keeps its chrome and is probed once
+  allow-log lie not-capable
+  allow-log left out
+  spawnbg A nof11
+  activate A
+  settle
+  expect A !lie
+  expect A !appfs
+  expect A notcapable
+  expect A fg
+
+test A2b a second window of a known non-capable app is not probed
+  allow-log lie not-capable
+  spawnbg A nof11
+  activate A
+  settle
+  expect-f11 0
+  expect A !lie
+
+test A3 an app that ignores the lie is not left stuck in a fullscreen the manager does not know about
+  allow-log lie missed
+  allow-log lie not-capable
+  allow-log ended at
+  allow-log left out
+  allow-log did not fill
+  spawnbg A metrics
+  activate A
+  settle
+
+for m in slow,late,anim,redisplay
+test A4[$m] activation of a '$m' app
+  spawnbg A $m
+  activate A
+  settle
+  expect A lie
+  expect A appfs
+endfor
+
+# ====================================================================================================================
+group Tiling (documented cases)
+
+test B1 Win+Left tiles to the left half, still borderless
+  normalize std
+  key Win+Left
+  settle
+  expect A lie
+  expect A at left
+
+test B2 Win+Right tiles to the right half
+  normalize std
+  key Win+Right
+  settle
+  expect A at right
+
+test B3 Win+Up fills the monitor
+  normalize std
+  key Win+Left
+  settle
+  key Win+Up
+  settle
+  expect A at full
+
+test B4 Win+Down minimizes
+  normalize std
+  key Win+Down
+  settle
+  expect A iconic
+  expect A !lie
+  expect A !appfs
+
+test B5 Left, Right, Up in sequence each land exactly
+  normalize std
+  key Win+Left
+  settle
+  expect A at left
+  key Win+Right
+  settle
+  expect A at right
+  key Win+Up
+  settle
+  expect A at full
+
+test B5b the same slot twice changes nothing and does no redundant work
+  normalize std
+  key Win+Left
+  settle
+  key Win+Left
+  settle
+  expect A at left
+  ux-expect-f11 0
+
+test B6 two windows side by side meet exactly with no gap or overlap
+  spawnbg A std 100 100 800 600
+  spawnbg B std 300 200 800 600
+  activate A
+  settle
+  key Win+Left
+  settle
+  activate B
+  settle
+  key Win+Right
+  settle
+  expect A at left
+  expect B at right
+  expect B lie
+
+test B6b switching between tiled windows keeps both tiles
+  spawnbg A std 100 100 800 600
+  spawnbg B std 300 200 800 600
+  activate A
+  settle
+  key Win+Left
+  settle
+  activate B
+  settle
+  key Win+Right
+  settle
+  activate A
+  settle
+  activate B
+  settle
+  activate A
+  settle
+  expect A at left
+  expect B at right
+
+test B6c three windows: two tiled, the third full, then tile it too
+  spawnbg A std 100 100 800 600
+  spawnbg B std 300 200 800 600
+  spawnbg C std 500 300 800 600
+  activate A
+  settle
+  key Win+Left
+  settle
+  activate B
+  settle
+  key Win+Right
+  settle
+  activate C
+  settle
+  expect C lie
+  key Win+Left
+  settle
+  expect C at left
+  expect B at right
+
+test B6d closing one tiled window leaves the other where it was
+  spawnbg A std 100 100 800 600
+  spawnbg B std 300 200 800 600
+  activate A
+  settle
+  key Win+Left
+  settle
+  activate B
+  settle
+  key Win+Right
+  settle
+  close B
+  settle
+  actor A
+  expect A at left
+  expect A fg
+
+test B6e minimizing one tiled window leaves the other, and restoring it returns it to its tile
+  spawnbg A std 100 100 800 600
+  spawnbg B std 300 200 800 600
+  activate A
+  settle
+  key Win+Left
+  settle
+  activate B
+  settle
+  key Win+Right
+  settle
+  key Win+Down
+  settle
+  expect B iconic
+  expect A at left
+  activate B
+  settle
+  ux-expect B at right
+
+test B7 Snap Layouts: drops out of fullscreen, then re-enters in the zone that was picked
+  normalize std
+  set ignoreZone 1
+  key Ctrl+Win+Alt
+  settle
+  expect A !lie
+  zone A 0 0 960 1200
+  settle
+  set ignoreZone 0
+  settle
+  expect A lie
+  expect A at left
+
+test B7b Snap Layouts cancelled: fullscreen comes back after the wait
+  normalize std
+  set ignoreZone 1
+  key Ctrl+Win+Alt
+  settle
+  sleep 11000
+  settle
+  set ignoreZone 0
+  expect A lie
+  expect A at full
+
+test B8 Alt+M maximizes a borderless window and Alt+M again restores its tile
+  normalize std
+  key Win+Left
+  settle
+  key Alt+M
+  settle
+  ux-expect A at full
+  key Alt+M
+  settle
+  ux-expect A at left
+
+test B9 a tile key held with Win down, several in a row, then released
+  normalize std
+  down Win
+  key Left
+  key Right
+  key Up
+  up Win
+  settle
+  expect A at full
+  expect-clean
+
+test B10 a normal (revealed) window tiles within the work area
+  normalize std
+  key Alt+T
+  settle
+  key Win+Left
+  settle
+  expect A at workleft
+  key Win+Right
+  settle
+  expect A at workright
+  key Win+Up
+  settle
+  expect A zoomed
+
+# ====================================================================================================================
+group Reveal and chrome
+
+test C1 Win+Alt tap reveals the chrome and a second tap hides it
+  normalize std
+  key Win+Alt
+  settle
+  expect A revealed
+  expect A !lie
+  expect A !appfs
+  expect-clean
+  key Win+Alt
+  settle
+  expect A lie
+  expect A appfs
+  expect A !revealed
+
+test C3 Alt+T toggles the same way
+  normalize std
+  key Alt+T
+  settle
+  expect A revealed
+  key Alt+T
+  settle
+  expect A lie
+
+test C4 reveal one window, switch to another: only the revealed one shows chrome
+  spawnbg A std 100 100 800 600
+  spawnbg B std 300 200 800 600
+  activate A
+  settle
+  key Alt+T
+  settle
+  activate B
+  settle
+  expect A revealed
+  expect B lie
+  expect B appfs
+
+test C5 revealing a tiled window and hiding it again returns to the tile
+  normalize std
+  key Win+Left
+  settle
+  key Alt+T
+  settle
+  key Alt+T
+  settle
+  ux-expect A at left
+
+test C6 reveal pressed right after a tile, before it finishes
+  normalize std
+  key Win+Left
+  key Alt+T
+  settle
+  expect A revealed
+
+test C6b a tile pressed right after a reveal
+  normalize std
+  key Alt+T
+  key Win+Left
+  settle
+
+test C7 Win+Alt held for a second is still a single toggle
+  normalize std
+  down Win
+  down Alt
+  sleep 1200
+  up Alt
+  up Win
+  settle
+  expect A revealed
+
+test C8 Win+Alt+Left is not a reveal tap
+  normalize std
+  down Win
+  down Alt
+  key Left
+  up Alt
+  up Win
+  settle
+  expect A !revealed
+
+test C9 reveal toggled ten times quickly ends consistent
+  normalize std
+  stress 10 40 Win+Alt
+  settle
+
+test C10 Win+Down then reveal on a minimized window does nothing harmful
+  normalize std
+  key Win+Down
+  settle
+  key Alt+T
+  settle
+  activate A
+  settle
+  expect A lie
+
+# ====================================================================================================================
+group Window commands
+
+test D1 Alt+Q closes the active window and the next one takes the focus
+  spawnbg A std 100 100 800 600
+  spawnbg B std 300 200 800 600
+  activate A
+  settle
+  activate B
+  settle
+  key Alt+Q
+  settle
+  actor A
+  expect A fg
+  expect-clean
+
+test D1b Win+Alt+X closes the active window the same way
+  spawnbg A std 100 100 800 600
+  spawnbg B std 300 200 800 600
+  activate A
+  settle
+  activate B
+  settle
+  key Win+Alt+X
+  settle
+  actor A
+  expect A fg
+
+test D3 Alt+N minimizes
+  normalize std
+  key Alt+N
+  settle
+  expect A iconic
+  expect A !lie
+
+test D5 restoring a minimized window brings it back fullscreen in its slot
+  normalize std
+  key Win+Left
+  settle
+  key Alt+N
+  settle
+  activate A
+  settle
+  expect A lie
+  ux-expect A at left
+
+test D6 a window closed while fullscreen leaves no state behind
+  spawnbg A std
+  activate A
+  settle
+  close A
+  settle
+
+test D7 an app that crashes while fullscreen leaves no state behind
+  spawnbg A std
+  activate A
+  settle
+  kill A
+  settle
+
+# ====================================================================================================================
+group Monitors (this machine has one)
+
+test E1 Win+Alt+1 on the monitor it is already on does nothing
+  normalize std
+  key Win+Left
+  settle
+  key Win+Alt+1
+  settle
+  expect A at left
+  expect-f11 0
+
+test E2 moving to a monitor that does not exist changes nothing
+  normalize std
+  key Win+Alt+2
+  settle
+  expect A at full
+
+test E3 Copilot key chord, monitor 1
+  normalize std
+  down Win
+  down Shift
+  down F23
+  key 1
+  up F23
+  up Shift
+  up Win
+  settle
+  expect A at full
+
+# ====================================================================================================================
+group Focus
+
+test F1 activating another window fullscreens it the first time
+  spawnbg A std 100 100 800 600
+  spawnbg B std 300 200 800 600
+  activate A
+  settle
+  activate B
+  settle
+  expect B lie
+  expect B fg
+  expect A lie
+
+test F2 hovering over a window focuses it
+  spawnbg A std 100 100 700 500
+  spawnbg B std 900 100 700 500
+  activate A
+  settle
+  cursor-on B
+  settle
+  expect B fg
+
+test F2b a window sliding out from under a resting pointer does not take the focus
+  spawnbg B std 1000 200 800 600
+  normalize std
+  cursor 1500 600
+  sleep 900
+  settle
+  key Win+Left
+  settle
+  sleep 1000
+  settle
+  expect A fg
+
+test F3 rapid switching among three windows
+  spawnbg A std 100 100 800 600
+  spawnbg B std 300 200 800 600
+  spawnbg C std 500 300 800 600
+  activate A
+  settle
+  for w in B,C,A,B,C,A,B,C
+  activate $w
+  settle
+  endfor
+
+test F3b the same without waiting in between
+  spawnbg A std 100 100 800 600
+  spawnbg B std 300 200 800 600
+  spawnbg C std 500 300 800 600
+  activate A
+  settle
+  activate B
+  activate C
+  activate A
+  activate B
+  settle
+  expect B fg
+
+test F4 after an Alt release the cursor follows the new foreground window
+  spawnbg A std 100 100 800 600
+  spawnbg B std 300 200 800 600
+  activate A
+  settle
+  cursor 5 5
+  settle
+  activate B
+  key Alt
+  settle
+  expect-cursor-in B
+
+# ====================================================================================================================
+group Virtual desktops (the user moves on while the manager is still working)
+
+test V1 leaving right after activating never drags the user back
+  spawnbg A std
+  activate A
+  sleep 30
+  desktop-away A
+  settle
+  expect A !fg
+
+test V2 a slow app finishing its fullscreen after the user left does not pull them back
+  spawnbg A slow
+  activate A
+  sleep 120
+  desktop-away A
+  settle
+  expect A !fg
+
+test V3 a tile in progress when the user leaves does not pull them back
+  normalize slow
+  key Win+Left
+  desktop-away A
+  settle
+  expect A !fg
+
+test V4 a reveal in progress when the user leaves does not pull them back
+  normalize std
+  key Alt+T
+  desktop-away A
+  settle
+  expect A !fg
+
+test V5 a minimize in progress when the user leaves does not pull them back
+  normalize slow
+  key Win+Down
+  desktop-away A
+  settle
+  expect A !fg
+
+test V6 back on that desktop the window is managed as usual
+  spawnbg A std
+  activate A
+  sleep 30
+  desktop-away A
+  settle
+  desktop-back A
+  activate A
+  settle
+  expect A lie
+  expect A fg
+
+test V7 the focus is never given to a window on another desktop even when asked
+  normalize std
+  desktop-away A
+  settle
+  activate A
+  settle
+  expect A !fg
+
+# ====================================================================================================================
+group Overlays
+
+test G1 three quick Alt taps flash a border and mask the last release
+  normalize std
+  repeat 3 80 Alt
+  settle
+  expect-log highlight
+  expect-clean
+
+test G2 both Alts show the hotkey list and again close it
+  normalize std
+  down Alt
+  down RAlt
+  up RAlt
+  up Alt
+  settle
+  expect-log hotkey list opened
+  down Alt
+  down RAlt
+  up RAlt
+  up Alt
+  settle
+  expect-log hotkey list closed
+
+# ====================================================================================================================
+group Hint mode
+
+test H1 Alt+F labels the controls on screen
+  require uia
+  normalize std
+  hint-show
+  expect-hints active
+  expect-hints min 3
+
+test H2 Esc hides the badges and clicks nothing
+  require uia
+  normalize std
+  hint-show
+  key Esc
+  settle
+  expect-hints inactive
+  expect-clicks A 0
+
+test H3 Alt+F again hides them
+  require uia
+  normalize std
+  hint-show
+  key Alt+F
+  settle
+  expect-hints inactive
+
+test H4 typing a label clicks that control
+  require uia
+  normalize std
+  hint-show
+  type a
+  settle
+  expect-hints inactive
+  expect-clicks A 1
+
+test H5 Shift+label clicks and keeps the badges for the next pick
+  require uia
+  normalize std
+  hint-show
+  key Shift+A
+  settle
+  expect-hints active
+  expect-clicks A 1
+  key Esc
+  settle
+
+test H6 a letter that matches nothing starts over
+  require uia
+  normalize std
+  hint-show
+  type f
+  settle
+  expect-hints active
+  expect-hints typed
+  key Esc
+  settle
+
+test H7 switching windows hides the badges
+  require uia
+  spawnbg A std 100 100 800 600
+  spawnbg B std 300 200 800 600
+  activate A
+  settle
+  hint-show
+  activate B
+  settle
+  expect-hints inactive
+
+test H8 a plain F types normally, whatever has focus
+  normalize std
+  key F
+  settle
+  expect-hints inactive
+  expect-no-output
+
+test G3 an Alt+Tab switch flashes the window it landed on
+  spawnbg A std 100 100 800 600
+  spawnbg B std 300 200 800 600
+  activate A
+  settle
+  down Alt
+  key Tab
+  activate B
+  up Alt
+  settle
+  expect B fg
+  expect-log alt\+tab landed on
+  expect-log highlight
+
+test G4 a plain Alt chord without Tab does not flash anything
+  normalize std
+  key Alt+J
+  settle
+  expect-nolog alt\+tab landed on
+
+test H13 only the focused window gets badges
+  require uia
+  spawnbg A std 100 100 800 600
+  spawnbg B std 1000 200 800 600
+  activate A
+  settle
+  hint-show
+  settle
+  expect-hints min 3
+  expect-hints max 5
+  key Esc
+  settle
+
+# ====================================================================================================================
+group Hint prefetch (the labels are worked out before Alt+F)
+
+test H9 pressing Alt+F after a pause shows the badges at once from the finished scan
+  require uia
+  normalize std
+  sleep 1200
+  hint-show
+  settle
+  expect-hints min 3
+  expect-metric hints-ms < 80
+  expect-log shown from the (prefetched|just-finished) scan
+  key Esc
+  settle
+
+test H10 pressing Alt+F straight after switching windows still shows them quickly
+  require uia
+  spawnbg A std 100 100 800 600
+  spawnbg B std 300 200 800 600
+  activate A
+  settle
+  activate B
+  hint-show
+  settle
+  expect-hints min 3
+  expect-metric hints-ms < 700
+  key Esc
+  settle
+
+test H11 a scan from before the focused window moved is never shown
+  require uia
+  normalize std
+  sleep 1200
+  key Win+Left
+  hint-show
+  settle
+  expect-hints min 3
+  expect-nolog shown from the prefetched
+  key Esc
+  settle
+
+test H12 two presses in a row both work from the scan
+  require uia
+  normalize std
+  sleep 1200
+  hint-show
+  key Esc
+  settle
+  hint-show
+  settle
+  expect-hints min 3
+  expect-metric hints-ms < 80
+  key Esc
+  settle
+
+# ====================================================================================================================
+group Hotkey outputs
+
+test Alt+] types End
+  normalize std
+  key Alt+]
+  settle
+  expect-tap End 1
+  expect-clean
+
+test Alt+[ types Home
+  normalize std
+  key Alt+[
+  settle
+  expect-tap Home 1
+  expect-clean
+
+test Alt+Shift+] selects to the end
+  normalize std
+  key Alt+Shift+]
+  settle
+  expect-tap End 1
+  expect-clean
+
+test Alt+Shift+[ selects to the start
+  normalize std
+  key Alt+Shift+[
+  settle
+  expect-tap Home 1
+  expect-clean
+
+test Alt+O opens a new line below
+  normalize std
+  key Alt+O
+  settle
+  expect-tap End 1
+  expect-tap Enter 1
+  expect-clean
+
+test Alt+Shift+O does the same
+  normalize std
+  key Alt+Shift+O
+  settle
+  expect-tap Enter 1
+  expect-clean
+
+test Alt+Z is the context menu key
+  normalize std
+  key Alt+Z
+  settle
+  expect-tap Apps 1
+  expect-clean
+
+test Alt+C is a left click
+  normalize std
+  key Alt+C
+  settle
+  expect-click
+  expect-clean
+
+test Left Alt+X is Escape
+  normalize std
+  key Alt+X
+  settle
+  expect-tap Esc 1
+  expect-clean
+
+test Right Alt+X is not Escape
+  normalize std
+  key RAlt+X
+  settle
+  expect-no-output
+  expect-nolog action Esc
+
+test PageUp goes to the previous virtual desktop
+  normalize std
+  key PgUp
+  settle
+  expect-tap Left 1
+  expect-clean
+
+test PageDown goes to the next virtual desktop
+  normalize std
+  key PgDn
+  settle
+  expect-tap Right 1
+  expect-clean
+
+test Alt+J scrolls down
+  normalize std
+  key Alt+J
+  settle
+  expect-wheel down 3
+  expect-clean
+
+test Alt+K scrolls up
+  normalize std
+  key Alt+K
+  settle
+  expect-wheel up 3
+  expect-clean
+
+test Alt+H scrolls left
+  normalize std
+  key Alt+H
+  settle
+  expect-wheel left 3
+  expect-clean
+
+test Alt+L scrolls right
+  normalize std
+  key Alt+L
+  settle
+  expect-wheel right 3
+  expect-clean
+
+test a held scroll key repeats
+  normalize std
+  down Alt
+  down J
+  down J
+  down J
+  up J
+  up Alt
+  settle
+  expect-wheel down 9
+  expect-clean
+
+test releasing Alt before the key still masks the release
+  normalize std
+  down Alt
+  down C
+  up Alt
+  up C
+  settle
+  expect-click
+  expect-clean
+
+test Shift pressed before Alt gives the same chord
+  normalize std
+  down Shift
+  down Alt
+  key ]
+  up Alt
+  up Shift
+  settle
+  expect-tap End 1
+  expect-clean
+
+test an extra Ctrl turns Alt+J into nothing
+  normalize std
+  key Ctrl+Alt+J
+  settle
+  expect-no-output
+  expect-nolog action Wheel
+
+test Alt+Shift+J is not bound
+  normalize std
+  key Alt+Shift+J
+  settle
+  expect-no-output
+  expect-nolog action Wheel
+
+test Win+Z (Snap Layouts key) goes through the tiling path, not to Windows
+  normalize std
+  set ignoreZone 1
+  key Win+Z
+  settle
+  set ignoreZone 0
+  expect-log snap layouts
+
+test a lone Alt tap reaches the app untouched
+  normalize std
+  key Alt
+  settle
+  expect-no-output
+  expect-clean
+
+test Alt+Tab is left to Windows
+  normalize std
+  key Alt+Tab
+  settle
+  expect-no-output
+
+test every binding twice in a row stays balanced
+  normalize std
+  repeat 2 30 Alt+]
+  repeat 2 30 Alt+[
+  repeat 2 30 Alt+Z
+  repeat 2 30 Alt+J
+  settle
+  expect-clean
+
+test all the Alt bindings mixed with Shift and Win presses
+  normalize std
+  for k in J,K,H,L,],[,O,Z,C,X
+  key Alt+$k
+  endfor
+  settle
+  expect-clean
+
+# ====================================================================================================================
+group Responsiveness
+
+test J1 the loop answers promptly while nothing is happening
+  normalize std
+  idle 3000
+
+test J2 a burst of tile keys settles on the last one
+  normalize std
+  stress 12 30 Win+Left Win+Right Win+Up
+  settle
+  expect A at full
+
+test J3 scroll keys are not held up by a tile in progress
+  normalize std
+  key Win+Left
+  stress 8 15 Alt+J
+  settle
+  expect-wheel down 24
+  expect-emit-latency wheel < 120
+
+test J4 scroll keys are not held up by a slow app's transition
+  spawnbg A slow
+  activate A
+  settle
+  key Win+Right
+  stress 8 15 Alt+J
+  settle
+  expect-wheel down 24
+  expect-emit-latency wheel < 120
+
+test J5 the first key after a window opens is acted on promptly
+  normalize std
+  spawnbg C std 400 300 700 500
+  key Alt+]
+  settle
+  expect-tap End 1
+  expect-emit-latency key < 150
+
+test J6 many windows open: a tile key still reacts quickly
+  spawnbg A std 100 100 800 600
+  spawnbg B std 150 120 800 600
+  spawnbg C std 200 140 800 600
+  spawnbg D std 250 160 800 600
+  spawnbg E std 300 180 800 600
+  spawnbg F std 350 200 800 600
+  activate F
+  settle
+  key Win+Left
+  settle
+  actor F
+  expect F at left
+
+test J7 hint badges appear quickly with several windows open
+  require uia
+  spawnbg A std 100 100 800 600
+  spawnbg B std 150 120 800 600
+  spawnbg C std 200 140 800 600
+  activate C
+  settle
+  hint-show
+  key Esc
+  settle
+
+# ====================================================================================================================
+group Robustness
+
+test R1 an app closes while it is being tiled
+  allow-log did not
+  normalize std
+  key Win+Left
+  close A
+  settle
+
+test R2 an app crashes while it is being tiled
+  allow-log did not
+  normalize std
+  key Win+Left
+  kill A
+  settle
+
+test R3 a new window opens while a tile is in progress
+  normalize std
+  key Win+Left
+  spawnbg C std 400 300 700 500
+  settle
+
+test R4 a hung app does not freeze the manager
+  allow-log did not
+  normalize std
+  fixture A hang 2500
+  key Win+Left
+  idle 3500
+  settle
+
+test R5 a fullscreen window is moved by something else
+  normalize std
+  place A 100 100 900 700
+  settle
+
+test R6 a fullscreen window is resized by something else
+  normalize std
+  place A 0 0 1000 1200
+  settle
+
+test R7 a fullscreen window is maximized by something else
+  normalize std
+  maximize A
+  settle
+
+test R8 a fullscreen window is minimized and restored by something else
+  normalize std
+  minimize A
+  settle
+  restore A
+  settle
+  activate A
+  settle
+
+test R9 the user presses the app's own F11 twice
+  normalize std
+  appf11 A
+  settle
+  appf11 A
+  settle
+
+test R10 the user presses the app's own F11 while tiled
+  normalize std
+  key Win+Left
+  settle
+  appf11 A
+  settle
+
+test R11 an app that never lets go of fullscreen quickly
+  spawnbg A late
+  activate A
+  settle
+  key Win+Right
+  settle
+  key Win+Alt
+  settle
+
+# ====================================================================================================================
+group Each action from the starting state
+
+for m in std,redisplay,late,anim
+singles $m Win+Left,Win+Right,Win+Up,Win+Down,Alt+M,Alt+N,Alt+T,Win+Alt,activate,appf11
+endfor
+# the slow fixture stalls its UI thread for 350ms, longer than the usual 300ms of quiet: wait longer before judging it
+set quietMs 520
+singles slow Win+Left,Win+Right,Win+Up,Win+Down,Alt+M,Alt+N,Alt+T,Win+Alt,activate,appf11
+set quietMs 300
+singles nof11 Win+Left,Win+Right,Win+Up,Win+Down,Alt+M,Alt+N,Alt+T,Win+Alt,activate,appf11
+
+# ====================================================================================================================
+group Every pair of actions
+
+pairs std Win+Left,Win+Right,Win+Up,Win+Down,Alt+M,Alt+N,Alt+T,Win+Alt,activate,appf11
+pairs nof11 Win+Left,Win+Right,Win+Up,Win+Down,Alt+M,Alt+N,Alt+T,Win+Alt,activate,appf11
+
+# ====================================================================================================================
+group Random walks (seeded, replayable)
+
+for seed in 1,2,3,4
+walk std $seed 60 Win+Left,Win+Right,Win+Up,Win+Down,Alt+M,Alt+N,Alt+T,Win+Alt,activate,appf11,ext-left,ext-big,ext-max,ext-min,ext-restore,other,back,hover-b bystander
+endfor
+for m in redisplay,late,anim
+walk $m 7 40 Win+Left,Win+Right,Win+Up,Win+Down,Alt+T,activate,appf11,ext-left,ext-max,ext-restore
+endfor
+walk nof11 5 40 Win+Left,Win+Right,Win+Up,Win+Down,Alt+M,Alt+N,Alt+T,activate,ext-left,ext-max,ext-min,ext-restore
+set quietMs 520
+walk slow 7 40 Win+Left,Win+Right,Win+Up,Win+Down,Alt+T,activate,appf11,ext-left,ext-max,ext-restore
+set quietMs 300
+
+# ====================================================================================================================
+group Shutdown
+
+test I1 the quit chord restores every window
+  spawnbg A std 100 100 800 600
+  spawnbg B std 300 200 800 600
+  activate A
+  settle
+  key Win+Left
+  settle
+  activate B
+  settle
+  key Win+Right
+  settle
+  quit-and-finish

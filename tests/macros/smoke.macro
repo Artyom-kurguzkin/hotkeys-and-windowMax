@@ -1,0 +1,95 @@
+# Smoke run: the single environment check, then the basics. A few minutes.
+# Verbs are documented at the top of tests/macros/full.macro.
+
+group Becoming borderless
+test A1 a capable app goes borderless in its slot when activated
+  spawnbg A std
+  activate A
+  settle
+  expect A lie
+  expect A appfs
+  expect A fg
+  expect-f11 1
+
+group Tiling
+test B1 Win+Left tiles to the left half
+  normalize std
+  key Win+Left
+  settle
+  expect A lie
+  expect A at left
+
+test B2 Win+Right then Win+Up
+  normalize std
+  key Win+Right
+  settle
+  expect A at right
+  key Win+Up
+  settle
+  expect A at full
+
+test B4 Win+Down minimizes and activating it brings it back
+  normalize std
+  key Win+Down
+  settle
+  expect A iconic
+  expect A !lie
+  activate A
+  settle
+  expect A lie
+
+group Virtual desktops
+test V1 leaving right after activating never drags the user back
+  spawnbg A std
+  activate A
+  sleep 30
+  desktop-away A
+  settle
+  expect A !fg
+
+group Hotkeys
+test Alt+] types End and masks the Alt release
+  normalize std
+  key Alt+]
+  settle
+  expect-tap End 1
+  expect-clean
+
+test Alt+J scrolls down three steps
+  normalize std
+  key Alt+J
+  settle
+  expect-wheel down 3
+  expect-clean
+
+group Hints
+test Alt+F shows badges quickly and Esc hides them
+  require uia
+  normalize std
+  hint-show
+  expect-hints active
+  expect-hints min 3
+  key Esc
+  settle
+  expect-hints inactive
+
+group Reveal
+test C1 Win+Alt reveals and hides
+  normalize std
+  key Win+Alt
+  settle
+  expect A revealed
+  expect A !lie
+  expect A !appfs
+  key Win+Alt
+  settle
+  expect A lie
+  expect A appfs
+
+group Pairs of actions (small)
+singles std Win+Left,Win+Right,Win+Up,Win+Down,Alt+M,Alt+N,Alt+T,Win+Alt,activate,appf11
+
+group Shutdown
+test quit chord restores every window
+  normalize std
+  quit-and-finish

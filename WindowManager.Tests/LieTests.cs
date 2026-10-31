@@ -67,4 +67,82 @@ public class LieTests
         var r = new Rect(0, 0, 960, 1200);
         Assert.Equal(r, LieLogic.AlignVisible(r, r, r)); // frame == window: nothing to compensate
     }
+
+    // ---- probe verdict: the false "not-capable" that sidelined Edge for a session ----
+    static readonly Rect Monitor = new(0, 0, 1920, 1200);
+
+    [Fact]
+    public void Probe_filled_the_slot_is_capable()
+    {
+        var slot = new Rect(0, 0, 960, 1200);
+        Assert.Equal(LieLogic.Probe.Capable, LieLogic.ProbeVerdict(new Rect(-3, 0, 1923, 745), new Rect(0, 0, 960, 1200), slot, Monitor));
+    }
+
+    [Fact]
+    public void Probe_fullscreened_to_the_real_monitor_is_a_miss_not_incapable() // Edge: lie not live yet
+    {
+        var slot = new Rect(-3, 0, 1923, 745);
+        Assert.Equal(LieLogic.Probe.LieMissed, LieLogic.ProbeVerdict(new Rect(-3, 0, 1923, 745), Monitor, slot, Monitor));
+    }
+
+    [Fact]
+    public void Probe_unchanged_window_is_not_capable() // Word: F11 did nothing
+    {
+        var before = new Rect(-11, -11, 1931, 1211);
+        Assert.Equal(LieLogic.Probe.NotCapable, LieLogic.ProbeVerdict(before, before, Monitor, Monitor));
+    }
+
+    [Fact]
+    public void Probe_landed_somewhere_odd_is_its_own_verdict_never_a_judgement_of_the_program()
+    {
+        var before = new Rect(100, 100, 900, 700);
+        Assert.Equal(LieLogic.Probe.Landed, LieLogic.ProbeVerdict(before, new Rect(50, 50, 500, 500), Monitor, Monitor));
+    }
+
+    // ---- clamp: an overhanging non-maximized frame must never become an off-screen slot ----
+    [Fact]
+    public void Clamp_pulls_an_overhanging_frame_onto_the_monitor() // Vivaldi parked at (-13,-10) 1946 wide
+    {
+        Assert.Equal(Monitor, LieLogic.Clamp(new Rect(-13, -10, 1933, 1213), Monitor));
+    }
+
+    [Fact]
+    public void Clamp_leaves_an_onscreen_frame_alone()
+    {
+        var half = new Rect(960, 0, 1920, 1200);
+        Assert.Equal(half, LieLogic.Clamp(half, Monitor));
+    }
+
+    // ---- fullscreen detector: F11 toggles, so "is it fullscreen NOW" must be observable, never assumed ----
+    [Fact]
+    public void App_fullscreen_is_an_exact_monitor_fit()
+    {
+        Assert.True(LieLogic.IsAppFullscreen(Monitor, Monitor));
+    }
+
+    [Fact]
+    public void Chromium_one_px_short_at_the_bottom_still_counts() // auto-hide taskbar sliver
+    {
+        Assert.True(LieLogic.IsAppFullscreen(new Rect(0, 0, 1920, 1199), Monitor));
+    }
+
+    [Fact]
+    public void Maximized_overhang_is_NOT_fullscreen() // Edge's -12 frame; the toggle bug hinged on this
+    {
+        Assert.False(LieLogic.IsAppFullscreen(new Rect(-12, -12, 1932, 1212), Monitor));
+    }
+
+    [Fact]
+    public void Edge_restore_rect_is_NOT_fullscreen() // what every wrong-way F11 landed on
+    {
+        Assert.False(LieLogic.IsAppFullscreen(new Rect(-12, 0, 1932, 754), Monitor));
+    }
+
+    [Fact]
+    public void Fullscreen_at_a_lied_slot_is_detected_against_that_slot()
+    {
+        var left = new Rect(0, 0, 960, 1200);
+        Assert.True(LieLogic.IsAppFullscreen(new Rect(0, 0, 960, 1199), left));
+        Assert.False(LieLogic.IsAppFullscreen(new Rect(0, 0, 960, 1199), Monitor));
+    }
 }

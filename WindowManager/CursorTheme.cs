@@ -12,8 +12,11 @@ public static class CursorTheme
     const uint SPI_SETCURSORS = 0x57, IMAGE_CURSOR = 2, LR_LOADFROMFILE = 0x10;
     const int IDC_ARROW = 32512;
 
+    // Cursors are shared by every desktop of the window station: a sandbox instance must neither set nor RESET them
+    // (Restore would wipe the real manager's hand-drawn pointers).
     public static void Apply()
     {
+        if (Desk.Sandbox) return;
         var dpi = GetDpiForSystem();
         var done = 0;
         foreach (var shape in CursorArt.All)
@@ -32,6 +35,7 @@ public static class CursorTheme
     // Cheap check: is the standard arrow still ours (size and hotspot)? If not, apply again.
     public static void EnsureApplied(string why)
     {
+        if (Desk.Sandbox) return;
         var dpi = GetDpiForSystem();
         if (CurrentArrow() is { } c && CursorArt.IsOurs(c.HotX, c.HotY, c.Width, dpi)) return;
         Log.Info($"cursors: Windows reset them ({why}), applying again");
@@ -56,6 +60,7 @@ public static class CursorTheme
 
     public static void Restore()
     {
+        if (Desk.Sandbox) return;
         if (!SystemParametersInfo(SPI_SETCURSORS, 0, IntPtr.Zero, 0)) Log.Win32("SystemParametersInfo(SPI_SETCURSORS)");
         else Log.Info("cursors: user's scheme restored");
     }

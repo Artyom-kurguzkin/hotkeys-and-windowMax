@@ -180,6 +180,9 @@ public class FocusTests
     [Fact]
     public void Hover_ignored_while_Alt_held() => Assert.False(Focus.ShouldHoverFocus(B, A, true, true));
 
+    [Fact] // the window under a RESTING pointer changed (one slid out from under it): not a hover
+    public void Hover_ignored_when_pointer_did_not_move() => Assert.False(Focus.ShouldHoverFocus(B, A, false, true, moved: false));
+
     [Fact]
     public void Switching_window_centers_cursor() => Assert.True(Focus.ShouldCenter(A, B, mouseInside: false));
 
@@ -368,6 +371,17 @@ public class WindowHotkeysTests
     {
         e.Feed(Vk.LAlt, true, false);
         return e.Feed(key, true, false);
+    }
+
+    [Fact] // hint mode: Alt+F toggles, the Alt release is masked (no menu bar / KeyTips), plain F is left alone
+    public void AltF_toggles_hints_and_masks_the_alt_release()
+    {
+        var e = new KeyEngine();
+        Assert.Equal(Decision.Pass, e.Feed(Vk.LAlt, true, false));
+        Assert.Equal(new Decision(true, Act.ToggleHints), e.Feed('F', true, false));
+        Assert.True(e.Feed('F', false, false).Suppress);
+        Assert.Equal(new Decision(false, MaskFirst: true), e.Feed(Vk.LAlt, false, false));
+        Assert.Equal(Decision.Pass, new KeyEngine().Feed('F', true, false)); // plain F types everywhere
     }
 
     [Fact]

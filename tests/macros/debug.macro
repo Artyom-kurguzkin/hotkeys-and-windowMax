@@ -1,0 +1,70 @@
+# A short macro for the cases that failed most recently. About two minutes.
+set quietMs 300
+
+group Debug
+test A1e a tiny window
+  allow-log lie missed
+  allow-log left out
+  spawnbg A std 300 300 140 90
+  activate A
+  settle
+
+test A3 an app that ignores the lie is not left stuck in a fullscreen the manager does not know about
+  allow-log lie missed
+  allow-log lie not-capable
+  allow-log ended at
+  allow-log left out
+  allow-log did not fill
+  spawnbg A metrics
+  activate A
+  settle
+
+test B7 Snap Layouts: drops out of fullscreen, then re-enters in the zone that was picked
+  normalize std
+  set ignoreZone 1
+  key Ctrl+Win+Alt
+  settle
+  expect A !lie
+  zone A 0 0 960 1200
+  settle
+  set ignoreZone 0
+  settle
+  expect A lie
+  expect A at left
+
+test F2b a window sliding out from under a resting pointer does not take the focus
+  spawnbg B std 1000 200 800 600
+  normalize std
+  cursor 1500 600
+  sleep 900
+  settle
+  key Win+Left
+  settle
+  sleep 1000
+  settle
+  expect A fg
+
+for seed in 1,2,3
+walk std $seed 60 Win+Left,Win+Right,Win+Up,Win+Down,Alt+M,Alt+N,Alt+T,Win+Alt,activate,appf11,ext-left,ext-big,ext-max,ext-min,ext-restore,other,back,hover-b bystander
+endfor
+walk slow 7 40 Win+Left,Win+Right,Win+Up,Win+Down,Alt+T,activate,appf11,ext-left,ext-max,ext-restore
+walk anim 7 40 Win+Left,Win+Right,Win+Up,Win+Down,Alt+T,activate,appf11,ext-left,ext-max,ext-restore
+
+# the slow app needs longer than the usual quiet period before it is judged
+set quietMs 520
+singles slow Win+Left,Win+Right,Win+Up,Win+Down,Alt+M,Alt+N,Alt+T,Win+Alt,activate,appf11
+set quietMs 300
+
+group Shutdown
+test I1 the quit chord restores every window
+  spawnbg A std 100 100 800 600
+  spawnbg B std 300 200 800 600
+  activate A
+  settle
+  key Win+Left
+  settle
+  activate B
+  settle
+  key Win+Right
+  settle
+  quit-and-finish

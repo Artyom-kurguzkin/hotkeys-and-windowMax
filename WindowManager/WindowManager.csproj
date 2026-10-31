@@ -15,9 +15,33 @@
 
   <!-- The injected monitor-lie DLL (built by native/build-native.ps1, committed as a binary)
        ships beside the exe; a normal build/publish needs no C compiler. -->
+  <!-- Hint mode uses System.Windows.Automation (UI Automation client). Reference the WPF part of the desktop
+       framework directly instead of UseWPF: UseWPF switches on WPF's XAML/markup build pass and implicit usings,
+       which broke an unrelated file (BinaryWriter "not found" in one signature). No XAML here, just the assemblies. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
+  </ItemGroup>
+
+  <!-- The hook DLL stays mapped in every GUI process until each one next pumps a message, so the copy in the
+       output folder is usually still in use when we rebuild. Windows allows renaming an in-use file, so move the
+       old copy aside (unique name) and copy the fresh one; stale .old files are swept once they unlock. -->
   <Target Name="CopyMonlieDll" AfterTargets="Build;Publish" Condition="Exists('native\monlie.dll')">
-    <Copy SourceFiles="native\monlie.dll" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="native\monlie.dll" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" Condition="'$(PublishDir)' != ''" />
+    <ItemGroup>
+      <StaleMonlie Include="$(OutDir)monlie.*.old" />
+    </ItemGroup>
+    <Delete Files="@(StaleMonlie)" ContinueOnError="true" />
+    <Move SourceFiles="$(OutDir)monlie.dll" DestinationFiles="$(OutDir)monlie.$([System.DateTime]::Now.Ticks).old"
+          Condition="Exists('$(OutDir)monlie.dll')" ContinueOnError="true" />
+    <Copy SourceFiles="native\monlie.dll" DestinationFolder="$(OutDir)" />
+    <!-- The published copy is locked just the same (every GUI process maps the dll the running manager injected), so move it
+         aside too. A new exe published next to the OLD dll lied garbage rectangles to every app (measured 2026-10-31). -->
+    <ItemGroup Condition="'$(PublishDir)' != ''">
+      <StalePublishedMonlie Include="$(PublishDir)monlie.*.old" />
+    </ItemGroup>
+    <Delete Files="@(StalePublishedMonlie)" ContinueOnError="true" Condition="'$(PublishDir)' != ''" />
+    <Move SourceFiles="$(PublishDir)monlie.dll" DestinationFiles="$(PublishDir)monlie.$([System.DateTime]::Now.Ticks).old"
+          Condition="'$(PublishDir)' != '' And Exists('$(PublishDir)monlie.dll')" ContinueOnError="true" />
+    <Copy SourceFiles="native\monlie.dll" DestinationFolder="$(PublishDir)" Condition="'$(PublishDir)' != ''" />
   </Target>
 
 </Project>

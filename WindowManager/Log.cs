@@ -10,7 +10,8 @@ public static class Log
     static string? path;
     static readonly object gate = new();
 
-    public static string DefaultDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WindowManager");
+    // Settable only so sandbox mode can move every file this program writes (log, state, crop overrides) out of the real folder.
+    public static string DefaultDir { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WindowManager");
 
     public static void Init(string dir, bool verbose)
     {

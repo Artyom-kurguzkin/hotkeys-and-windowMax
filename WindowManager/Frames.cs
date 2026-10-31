@@ -78,6 +78,12 @@ public static class Frames
         return GetMonitorInfo(h, ref mi) ? new Monitor(h, mi.szDevice, mi.rcMonitor, mi.rcWork, (mi.dwFlags & 1) != 0) : null;
     }
 
+    public static Rect MonitorRectOf(IntPtr hmon)
+    {
+        var mi = new MONITORINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<MONITORINFO>() };
+        return GetMonitorInfo(hmon, ref mi) ? mi.rcMonitor : default;
+    }
+
     public static Rect MonitorRect(IntPtr hwnd)
     {
         var mi = new MONITORINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<MONITORINFO>() };

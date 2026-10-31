@@ -1,0 +1,8 @@
+schema: spec-driven
+created: 2026-10-31
+x-rtm:
+  id: 10
+  title: Add borderless windows + Add chrome crop + borderless windows
+  status: In Review
+  contributors: [Artyom-kurguzkin]
+  mergedFrom: [1, 2, 6]

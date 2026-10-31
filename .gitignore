@@ -4,3 +4,4 @@ dist/
 .vs/
 *.user
 TestResults/
+tests/out/
