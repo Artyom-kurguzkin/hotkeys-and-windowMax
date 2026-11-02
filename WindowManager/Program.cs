@@ -357,7 +357,7 @@ static partial class Program
             Log.Debug($"key vk=0x{k.vkCode:X2} {(down ? "down" : "up")}{(injected ? " injected" : "")}");
 
             if (down && !injected && k.vkCode == 0x09 && AltHeld) altTabbed = true;
-            if (down && !injected && k.vkCode is Vk.LAlt or Vk.RAlt && !AltHeld) { Desk.GetCursor(out altDownPos); PostMessage(msgWnd, WM_APP_PREFETCH, IntPtr.Zero, IntPtr.Zero); }
+            if (down && !injected && k.vkCode is Vk.LAlt or Vk.RAlt && !AltHeld) { Desk.GetCursor(out altDownPos); prevActive = Desk.Foreground(); PostMessage(msgWnd, WM_APP_PREFETCH, IntPtr.Zero, IntPtr.Zero); }
             if (!injected && RouteHint((int)k.vkCode, down)) return 1; // F toggles hints / letters pick / Esc hides
             var d = keys.Feed((int)k.vkCode, down, injected, k.time);
             if (d.MaskFirst)
@@ -440,6 +440,13 @@ static partial class Program
                     Send(KeyEngine.Lift(held));
                     SendMouse(MouseInput(MOUSEEVENTF_LEFTDOWN), MouseInput(MOUSEEVENTF_LEFTUP));
                     Send(KeyEngine.Restore(held, keys.Held));
+                });
+                break;
+            case Act.DesktopLeft or Act.DesktopRight when !Desk.Sandbox: // the sandbox records the keystroke instead
+                Inject(() =>
+                {
+                    if (VirtualDesktops.Switch(act == Act.DesktopRight)) return;
+                    Send([.. KeyEngine.Lift(held), .. KeyEngine.Output(act), .. KeyEngine.Restore(held, keys.Held)]);
                 });
                 break;
             default:
@@ -823,7 +830,7 @@ static partial class Program
     {
         if (Desk.Sandbox) NoteKeyDispatched();
         if (down && vk == 0x09 && AltHeld) altTabbed = true;
-        if (down && !AltHeld && vk is Vk.LAlt or Vk.RAlt) { Desk.GetCursor(out altDownPos); PostMessage(msgWnd, WM_APP_PREFETCH, IntPtr.Zero, IntPtr.Zero); }
+        if (down && !AltHeld && vk is Vk.LAlt or Vk.RAlt) { Desk.GetCursor(out altDownPos); prevActive = Desk.Foreground(); PostMessage(msgWnd, WM_APP_PREFETCH, IntPtr.Zero, IntPtr.Zero); }
         if (RouteHint(vk, down)) { Log.Debug($"testkey vk=0x{vk:X2} {(down ? "down" : "up")} -> hints"); return; }
         var d = keys.Feed(vk, down, false, (uint)Environment.TickCount);
         if (Desk.Sandbox) SandboxKeyOutcome(vk, down, d); // what the app would see: the passed-through key, or the mask+release the real hook injects

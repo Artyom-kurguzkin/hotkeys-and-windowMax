@@ -1,0 +1,10 @@
+schema: spec-driven
+skip_specs: true
+created: 2026-10-31
+x-rtm:
+  id: 14
+  title: how to decide to which project new work item goes?
+  status: Planned
+  priority: high
+  contributors: [Artyom-kurguzkin]
+  label: enhancement

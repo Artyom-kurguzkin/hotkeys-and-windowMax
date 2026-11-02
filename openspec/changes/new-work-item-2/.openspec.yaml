@@ -1,0 +1,8 @@
+schema: spec-driven
+skip_specs: true
+created: 2026-10-31
+x-rtm:
+  id: 13
+  title: New work item
+  status: Backlog
+  contributors: [Artyom-kurguzkin]
