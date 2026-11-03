@@ -144,6 +144,10 @@ static partial class Program
         if (args.Contains("--hotkeys")) { HelpWindow.ShowAndWait(); return 0; } // the list on its own, no hooks
         if (args.Contains("--lie-test")) { LieTest(args); return 0; }  // exercise the monitor-lie engine on one window
 
+        // Two launches at once (a double-click) would each look for the other's message window before either created
+        // it, and both stay running: one's masked Alt release is injected, the other ignores it and keeps Alt held.
+        var startup = new Mutex(false, @"Local\WindowManagerStartup");
+        try { startup.WaitOne(); } catch (AbandonedMutexException) { } // the holder died mid-start: ours now anyway
         if (!Desk.Sandbox) { ReplaceRunningInstances(); RecoverFromDeadInstance(); } // a sandbox never touches another instance or its state
         new Thread(() =>
         {
@@ -161,6 +165,7 @@ static partial class Program
         }) { IsBackground = true, Name = "lie-worker" }.Start();
         msgWnd = CreateMessageWindow();
         if (msgWnd == IntPtr.Zero) return 1;
+        startup.ReleaseMutex(); // our window is findable now: a later launch replaces us
 
         var hook = IntPtr.Zero;
         if (!Desk.Sandbox) // the sandbox is driven through the test channel; a hook there would see nothing
