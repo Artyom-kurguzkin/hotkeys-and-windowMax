@@ -121,6 +121,18 @@ public class HotkeysTests
     }
 
     [Fact]
+    public void Win_release_lost_to_the_lock_screen_does_not_stick()
+    {
+        e.Feed(Vk.LWin, true, false); // Win+L: the Win key-up goes to the secure desktop, never to us
+        e.DropReleased(vk => vk == Vk.LAlt); // after the wake only Alt is physically down
+        e.Feed(Vk.LAlt, true, false);
+        Assert.Equal(new Decision(true, Act.Esc), e.Feed('X', true, false)); // not Win+Alt+X = Close
+        e.Feed('X', false, false); e.Feed(Vk.LAlt, false, false);
+        e.DropReleased(_ => false);
+        Assert.Equal(new Decision(true, Act.DesktopLeft), e.Feed(Vk.PgUp, true, false));
+    }
+
+    [Fact]
     public void CtrlAltShiftQ_quits() => Assert.Equal(new Decision(true, Act.Quit), Chord('Q', Vk.LCtrl, Vk.LAlt, Vk.LShift));
 }
 

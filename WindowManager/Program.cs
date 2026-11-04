@@ -361,6 +361,8 @@ static partial class Program
             var injected = (k.flags & LLKHF_INJECTED) != 0;
             Log.Debug($"key vk=0x{k.vkCode:X2} {(down ? "down" : "up")}{(injected ? " injected" : "")}");
 
+            // Modifier key-downs always pass, so the OS state is right for them (the key being fed isn't updated yet: skipped).
+            if (down && !injected) keys.DropReleased(vk => vk == k.vkCode || (GetAsyncKeyState(vk) & 0x8000) != 0);
             if (down && !injected && k.vkCode == 0x09 && AltHeld) altTabbed = true;
             if (down && !injected && k.vkCode is Vk.LAlt or Vk.RAlt && !AltHeld) { Desk.GetCursor(out altDownPos); prevActive = Desk.Foreground(); PostMessage(msgWnd, WM_APP_PREFETCH, IntPtr.Zero, IntPtr.Zero); }
             if (!injected && RouteHint((int)k.vkCode, down)) return 1; // F toggles hints / letters pick / Esc hides

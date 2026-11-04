@@ -136,6 +136,16 @@ public sealed class KeyEngine
         lock (gate) foreach (var h in held) if (Vk.IsAltOrWin(h)) dirty.Add(h);
     }
 
+    // Forget modifiers whose release we never saw. Win+L (or the lock screen on sleep) delivers the Win key-up on the
+    // secure desktop, out of the hook's reach: Win stayed "held" for good, so Alt+X fired Win+Alt+X (Close) and PgUp
+    // became an unbound Win+PgUp (real log, after a wake). isDown = the OS's physical key state.
+    public void DropReleased(Func<int, bool> isDown)
+    {
+        lock (gate)
+            foreach (var vk in held.ToArray())
+                if (!isDown(vk)) { held.Remove(vk); dirty.Remove(vk); if (vk is Vk.LWin or Vk.RWin) copilotHeld = false; }
+    }
+
     public Mod Mods { get { lock (gate) return ModsOf(held); } }
 
     static Mod ModsOf(IEnumerable<int> vks)
