@@ -26,19 +26,14 @@
        output folder is usually still in use when we rebuild. Windows allows renaming an in-use file, so move the
        old copy aside (unique name) and copy the fresh one; stale .old files are swept once they unlock. -->
   <Target Name="CopyMonlieDll" AfterTargets="Build;Publish" Condition="Exists('native\monlie.dll')">
-    <ItemGroup>
-      <StaleMonlie Include="$(OutDir)monlie.*.old" />
-    </ItemGroup>
-    <Delete Files="@(StaleMonlie)" ContinueOnError="true" />
+    <!-- del, not <Delete>: a leftover still mapped by some app is expected, not worth a warning on every build. -->
+    <Exec Command="del /q &quot;$(OutDir)monlie.*.old&quot; 2&gt;nul" IgnoreExitCode="true" EchoOff="true" StandardOutputImportance="low" />
     <Move SourceFiles="$(OutDir)monlie.dll" DestinationFiles="$(OutDir)monlie.$([System.DateTime]::Now.Ticks).old"
           Condition="Exists('$(OutDir)monlie.dll')" ContinueOnError="true" />
     <Copy SourceFiles="native\monlie.dll" DestinationFolder="$(OutDir)" />
     <!-- The published copy is locked just the same (every GUI process maps the dll the running manager injected), so move it
          aside too. A new exe published next to the OLD dll lied garbage rectangles to every app (measured 2026-10-31). -->
-    <ItemGroup Condition="'$(PublishDir)' != ''">
-      <StalePublishedMonlie Include="$(PublishDir)monlie.*.old" />
-    </ItemGroup>
-    <Delete Files="@(StalePublishedMonlie)" ContinueOnError="true" Condition="'$(PublishDir)' != ''" />
+    <Exec Command="del /q &quot;$(PublishDir)monlie.*.old&quot; 2&gt;nul" IgnoreExitCode="true" EchoOff="true" StandardOutputImportance="low" Condition="'$(PublishDir)' != ''" />
     <Move SourceFiles="$(PublishDir)monlie.dll" DestinationFiles="$(PublishDir)monlie.$([System.DateTime]::Now.Ticks).old"
           Condition="'$(PublishDir)' != '' And Exists('$(PublishDir)monlie.dll')" ContinueOnError="true" />
     <Copy SourceFiles="native\monlie.dll" DestinationFolder="$(PublishDir)" Condition="'$(PublishDir)' != ''" />

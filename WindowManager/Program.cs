@@ -77,7 +77,7 @@ static partial class Program
     static readonly HashSet<IntPtr> cropRetries = [];
     static IntPtr prevActive, lastHover;
     static bool altTabbed; // Tab went down while Alt was held: on the Alt release, flash the window the switch landed on
-    const uint SwitchHighlightMs = 1500;
+    const uint SwitchHighlightMs = 1000;
     static POINT lastHoverPos; // hover-focus only reacts to a pointer that moved (see Focus.ShouldHoverFocus)
 
     const string TrackPointMatch = "LEN0325"; // substring of the TrackPoint's raw-input device path (Device Manager → hardware IDs)
@@ -1535,7 +1535,7 @@ static partial class Program
 
     // ---- triple Alt: flash a border around the active window ----
 
-    const uint HighlightMs = 1200;
+    const uint HighlightMs = 1000;
     static readonly IntPtr[] borders = new IntPtr[4]; // top, bottom, left, right strips
     static WndProc? borderProc;
     static IntPtr borderBrush;

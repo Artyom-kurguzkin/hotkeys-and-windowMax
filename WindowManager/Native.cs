@@ -51,6 +51,7 @@ public static class Native
     [DllImport("user32.dll")] public static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool UnhookWindowsHookEx(IntPtr hhk);
     [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vk);
+    [DllImport("user32.dll")] public static extern bool PostThreadMessage(uint threadId, uint msg, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint n, INPUT[] inputs, int size);
     [DllImport("user32.dll")] public static extern int GetMessage(out MSG msg, IntPtr hWnd, uint min, uint max);
     [DllImport("user32.dll")] public static extern bool TranslateMessage(ref MSG msg);

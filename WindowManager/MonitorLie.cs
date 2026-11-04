@@ -94,7 +94,22 @@ public static class MonitorLie
     {
         foreach (var pid in procs.Keys.ToArray()) DisableAll(pid);
         ReleaseAll();
-        if (hook != IntPtr.Zero) { UnhookWindowsHookEx(hook); hook = IntPtr.Zero; Log.Info("monitor-lie hook removed"); }
+        if (hook != IntPtr.Zero) { UnhookWindowsHookEx(hook); hook = IntPtr.Zero; Log.Info($"monitor-lie hook removed, woke {WakeAllThreads()} threads to unload monlie.dll"); }
+    }
+
+    // Windows unloads a hook dll from a process only when one of its threads next retrieves a message. Idle ones (widget host,
+    // background PowerShell, service hosts) kept it mapped for hours after quit, locking dist\monlie.dll. A WM_NULL wakes each
+    // thread with a queue; the rest fail harmlessly. Process.Threads reads the system snapshot: no process handle needed.
+    static int WakeAllThreads()
+    {
+        var woke = 0;
+        foreach (var p in System.Diagnostics.Process.GetProcesses())
+        {
+            try { foreach (System.Diagnostics.ProcessThread t in p.Threads) if (PostThreadMessage((uint)t.Id, 0 /* WM_NULL */, IntPtr.Zero, IntPtr.Zero)) woke++; }
+            catch { } // exited meanwhile
+            finally { p.Dispose(); }
+        }
+        return woke;
     }
 
     static IntPtr View(uint pid)

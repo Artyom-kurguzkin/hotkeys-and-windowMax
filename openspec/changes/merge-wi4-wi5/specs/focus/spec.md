@@ -48,11 +48,11 @@ The system SHALL move the cursor to the center of the active window when Alt is 
 - **THEN** the cursor is not moved
 
 ### Requirement: Alt+Tab flashes the window it lands on
-The system SHALL, when Alt is released after Tab was pressed while Alt was held, flash a border around the window that now has the focus for 1.5 seconds. An Alt chord without Tab SHALL NOT flash anything.
+The system SHALL, when Alt is released after Tab was pressed while Alt was held, flash a border around the window that now has the focus for 1 second. An Alt chord without Tab SHALL NOT flash anything.
 
 #### Scenario: Switch flashes
 - **WHEN** the user switches window with Alt+Tab
-- **THEN** the new window shows the highlight border for 1.5 seconds
+- **THEN** the new window shows the highlight border for 1 second
 
 #### Scenario: Plain Alt chord does not flash
 - **WHEN** the user presses Alt+J
