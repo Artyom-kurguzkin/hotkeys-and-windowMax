@@ -1,4 +1,4 @@
-<!-- repo-tasks-guide v7 plans=DevResources/plans -->
+<!-- repo-tasks-guide v8 plans=DevResources/plans -->
 # Repo Tasks: conventions for agents
 
 This repository's `openspec/` folder is shown and edited by the **Repo Tasks** app, a board of work items.
@@ -66,16 +66,96 @@ When work lands, update **every** open work item it touches: the one you worked 
 - **Spec and tasks text** of those items, where you changed the behaviour they describe.
 - **Status** and **dates**: set `status` to where the work is; `x-rtm.started: yyyy-MM-dd` is the day work began (the app stamps it on the first move to In Progress), `x-rtm.due: yyyy-MM-dd` the due day.
 
-## 3. Keep OpenSpec valid
+## 3. Create a work item
 
-- A work item is a change folder with `.openspec.yaml` (`schema: spec-driven`, `created:`, the `x-rtm:` block), `proposal.md` with `## Why` and `## What Changes`, `tasks.md` with numbered checkboxes, and, when behaviour changes, `specs/<capability>/spec.md` deltas under `## ADDED Requirements`, `## MODIFIED Requirements`, `## REMOVED Requirements` or `## RENAMED Requirements`. Every requirement has at least one `#### Scenario:`.
-- A **MODIFIED** block replaces the whole requirement when the item is archived: copy **every** scenario of the current main spec into it and change what you change. (The app puts missing scenarios back before archiving, but a stale block fails validation until then.)
+**Work item or subtask?** A work item is one result that can be finished and archived on its own; it is one card on the board. A subtask is a step towards that result. So when you are asked to add tasks, or your plan has several milestones or deliverables, each one is its own work item, not a group of subtasks inside one item: an item with more than about ten subtasks should be several items. An item that has to wait for another lists it, `dependsOn: [<id>]`, and has `status: Blocked`.
+
+A work item is one folder, `openspec/changes/<folder>/`, holding the files of the example below. Write them yourself, step by step; do not copy another item's folder.
+
+1. **Folder name**: a short kebab-case name from the title (`rate-limit-the-api`). It must be new: not a folder under `openspec/changes/`, and not one under `openspec/changes/archive/` either (ignore the `yyyy-MM-dd-` prefix there). If it is taken, add `-2`.
+2. **Number**: `x-rtm.id` is the highest `id` in every `.openspec.yaml` under `openspec/changes/`, archived ones included, plus 1. Read them when you write the file, not earlier (section 5).
+3. **Feature**: one per item, the capability the work belongs to. The features that exist are the folders under `openspec/specs/` (`features: [billing]`, nested: `[functional/banking]`) and the names under `x-rtm.features` in `openspec/config.yaml` (features with no spec yet). Use one of those when it fits. The item's delta spec (step 5) goes under that same name, `specs/<feature>/spec.md`, never under another one. Make up a new kebab-case name only for a capability that is really new, and use it in both places.
+4. **Status**: `Backlog` or `Planned` for work not started; `In Progress` with `started: <today>` when you are doing it now. `label` is `bug`, `feature`, `enhancement`, or left out.
+5. **Specs or not**: when the work changes what the product does, write a delta spec (below). When it does not (a refactoring, a chore), write no `specs/` folder and put `skip_specs: true` on the line after `schema:`; without one of the two the item is invalid.
+6. **Links**: what the item points to is a key in its `x-rtm:` block, each on one line. Leave out what you do not have.
+   - `plan: DevResources/plans/<title-slug>-<yyyy-MM-dd>.md`: the plan you wrote for the item (section 0), as a path from the repository root. Write the file first; the item page opens it.
+   - `dependsOn: [<id>, …]`: the items this one waits for.
+   - `tests: [{suite: <test class>, test: "<test display name>"}]`: the tests that prove the work, and `commits: [<7-char hash>, …]`: the commits that made it (section 2 has the rules for both).
+   - `started: yyyy-MM-dd` and `due: yyyy-MM-dd`.
+   - In any text of the item, write `#wi<id>` for another item and `#n<id>` for a note.
+   - Anything longer, and files and web links, go in a note of the item, `notes/n<id>.md`, with `links:`, `commits:` and `attachments:` in its frontmatter (section 2).
+7. **Sign it** (section 1) and **validate** it (section 4) before you stop.
+
+A complete, valid item:
+
+`openspec/changes/rate-limit-the-api/.openspec.yaml`
+
+```yaml
+schema: spec-driven
+created: 2026-11-06
+x-rtm:
+  id: 98
+  title: Rate-limit the API
+  status: Planned
+  contributors: [Claude]
+  features: [api-limits]
+  label: feature
+  plan: DevResources/plans/rate-limit-the-api-2026-11-06.md
+  agentBy: Claude
+  agentAt: 2026-11-06T10:00:00
+```
+
+`openspec/changes/rate-limit-the-api/proposal.md`
+
+```markdown
+## Why
+
+One client can flood the API and slow it down for everyone else; there is no limit on requests today.
+
+## What Changes
+
+- Each API key gets 100 requests a minute; more are refused until the minute is over.
+```
+
+`openspec/changes/rate-limit-the-api/tasks.md`
+
+```markdown
+## 1. Limiter
+
+- [ ] 1.1 Count requests per API key and refuse the 101st <!-- agent: Claude -->
+```
+
+`openspec/changes/rate-limit-the-api/specs/api-limits/spec.md`
+
+```markdown
+## ADDED Requirements
+
+### Requirement: Requests are limited per API key
+The API SHALL refuse a key's requests beyond 100 in one minute with status 429.
+
+#### Scenario: Limit reached
+- **WHEN** a key sends its 101st request within a minute
+- **THEN** the response is 429 and the request is not processed
+```
+
+`## Why` is 50 to 1000 characters. In `tasks.md` every subtask sits under a group heading, `## <group>. <name>`, and is numbered `<group>.<n>`: `- [ ] 1.1 …`, `- [ ] 1.2 …`, then `## 2. …` with `- [ ] 2.1 …`. A list with no group heading, or numbered `1.`, `2.`, shows on the board without its groups and numbers. To add a subtask to an item that exists, append it to its group with the next number and sign it; never renumber the others. A delta spec is always `specs/<capability>/spec.md`, one per capability, never `specs/spec.md`. Every requirement is a sentence or two containing SHALL or MUST (under 500 characters), then at least one `#### Scenario:` with `- **WHEN** …` and `- **THEN** …` lines.
+
+**Which heading a requirement goes under.** Open the main spec, `openspec/specs/<capability>/spec.md`, and look for `### Requirement: <the exact name>`. Only the main spec counts, not what another open change adds.
+
+- The capability has no spec file yet, or the requirement is not in it: `## ADDED Requirements`. A new capability's delta has ADDED requirements only.
+- The requirement is there and you change it: `## MODIFIED Requirements`, under its exact name, with the whole requirement: its text and **every** scenario, changed where you change it. The block replaces the old one when the item is archived.
+- It is there and you delete it: `## REMOVED Requirements` with its `### Requirement: <name>` line alone.
+- It is there and you rename it: `## RENAMED Requirements` with `- FROM: ### Requirement: <old name>` and, on the next line, `- TO: ### Requirement: <new name>`.
+
+## 4. Keep OpenSpec valid
+
 - Validate before you stop: `npx -y @fission-ai/openspec@1.14.3 validate <change-name> --strict`.
+- A wrong heading (section 3) or a MODIFIED block that lacks a scenario the main spec has since gained makes the item invalid. The app repairs both when the user completes the item, but until then every reader of the item sees it wrong: get it right when you write it.
 - Statuses: Backlog, Planned, Confirmed, In Progress, Blocked, In Review, Completed. `Completed` means archived: archive with the OpenSpec CLI (`openspec archive <change-name> --yes`), never set it by hand.
 - Keep `x-rtm` keys, comments and formatting you did not change. Lists stay on one line: `features: [a, b]`. A work item has one feature.
 - Subtasks keep their `1.1`, `1.2`… numbers; add new ones at the end of their group.
 
-## 4. Numbers
+## 5. Numbers
 
 - A work item's `x-rtm.id` is unique: use the highest `id` across **all** `.openspec.yaml` files, archived ones included, plus 1. The user creates and merges items at the same time, so compute it when you write, not earlier.
 - Refer to work items as `#wi<id>` and notes as `#n<id>`.
