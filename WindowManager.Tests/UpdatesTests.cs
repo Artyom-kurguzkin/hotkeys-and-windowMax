@@ -96,12 +96,13 @@ public sealed class UpdatesTests : IDisposable
         Assert.Equal(2, github.Requests.Count);   // the query and the download
         Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(files)!, "*.zip"));   // the zip is gone once unpacked
 
-        // applying swaps the staged folder into this install and restarts this exe
+        // applying starts the helper with the staged folder, this install, and this exe to restart
         Assert.True(checker.Apply());
         var apply = Assert.Single(launched);
         Assert.Equal(files, apply.Staged);
         Assert.Equal(Install, apply.Install);
         Assert.Equal(ExePath, apply.RestartExe);
+        Assert.Equal(Environment.ProcessId, apply.ProcessId);
         Assert.False(checker.Apply());   // once
     }
 
@@ -217,11 +218,11 @@ public sealed class UpdatesTests : IDisposable
         await checker.CheckAsync();
         Assert.Equal(("Update 0.1.14 ready", true), checker.MenuLine());
         Assert.True(checker.Apply());
-        Assert.Null(checker.MenuLine());   // installed: nothing left to click
+        Assert.Null(checker.MenuLine());   // the helper is started: nothing left to click
     }
 
     [Fact]
-    public void The_swap_replaces_files_in_place_renames_locked_ones_aside_and_rolls_back_on_failure()
+    public async Task The_helper_script_swaps_the_files_and_renames_a_locked_hook_dll_aside()
     {
         var staged = Path.Combine(root, "staged");
         Directory.CreateDirectory(Path.Combine(staged, "web"));
@@ -236,26 +237,29 @@ public sealed class UpdatesTests : IDisposable
         File.WriteAllText(Path.Combine(Install, "monlie.dll"), "old hook");
         File.WriteAllText(Path.Combine(Install, "monlie.1.old"), "an earlier leftover, unlocked now");
 
-        // a running exe / mapped dll can be renamed and read, not overwritten: FileShare.Delete stands in for that
+        // a process that has already ended stands in for the manager
+        using var gone = Process.Start(new ProcessStartInfo("cmd.exe", "/c exit") { CreateNoWindow = true, UseShellExecute = false })!;
+        gone.WaitForExit();
+
+        var backup = Path.Combine(root, "previous");
+        var log = Path.Combine(root, "helper", "apply.log");
+        // a hook dll another process still maps can be renamed and read, not overwritten: FileShare.Delete stands in for that
         using (var held = new FileStream(Path.Combine(Install, "monlie.dll"), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-            Assert.True(UpdateHelper.Apply(new UpdateApplication(staged, Install, RestartExe: null)));
+        {
+            using var helper = UpdateHelper.Launch(new UpdateApplication(staged, Install, backup, gone.Id, RestartExe: null), log, retries: 1);
+            Assert.NotNull(helper);
+            Assert.True(await Task.Run(() => helper.WaitForExit(60_000)), "the helper did not finish");
+            Assert.True(helper.ExitCode == 0, File.Exists(log) ? File.ReadAllText(log) : "no helper log");
+        }
 
         Assert.Equal("new exe", File.ReadAllText(Path.Combine(Install, "WindowManager.exe")));
         Assert.Equal("new page", File.ReadAllText(Path.Combine(Install, "web", "editor.html")));
         Assert.Equal("not in the release", File.ReadAllText(Path.Combine(Install, "web", "kept.txt")));   // files the release does not hold stay
         Assert.Equal("new hook", File.ReadAllText(Path.Combine(Install, "monlie.dll")));
-        Assert.False(File.Exists(Path.Combine(Install, "monlie.1.old")));   // the unlocked leftover was swept
-        Assert.Equal("old hook", File.ReadAllText(Assert.Single(Directory.GetFiles(Install, "monlie.dll.*.old"))));
-        UpdateHelper.Sweep(Install);   // nothing holds them now: the next start removes them
-        Assert.Empty(Directory.GetFiles(Install, "*.old", SearchOption.AllDirectories));
-
-        // a file that cannot be renamed aside (held without FileShare.Delete) fails the swap and leaves the install as it was
-        File.WriteAllText(Path.Combine(staged, "WindowManager.exe"), "newer exe");
-        File.WriteAllText(Path.Combine(staged, "web", "editor.html"), "newer page");
-        using (var locked = new FileStream(Path.Combine(Install, "web", "editor.html"), FileMode.Open, FileAccess.Read, FileShare.Read))
-            Assert.False(UpdateHelper.Apply(new UpdateApplication(staged, Install, RestartExe: null)));
-        Assert.Equal("new exe", File.ReadAllText(Path.Combine(Install, "WindowManager.exe")));
-        Assert.Equal("new page", File.ReadAllText(Path.Combine(Install, "web", "editor.html")));
-        Assert.Empty(Directory.GetFiles(Install, "*.old", SearchOption.AllDirectories));
+        var moved = Assert.Single(Directory.GetFiles(Install, "monlie.*.old"));   // the unlocked leftover was swept, the locked one renamed aside
+        Assert.NotEqual("monlie.1.old", Path.GetFileName(moved));
+        Assert.Equal("old hook", File.ReadAllText(moved, Encoding.UTF8));
+        Assert.Equal("old exe", File.ReadAllText(Path.Combine(backup, "WindowManager.exe")));   // one rollback copy
+        Assert.Contains("Updated", File.ReadAllText(log));
     }
 }

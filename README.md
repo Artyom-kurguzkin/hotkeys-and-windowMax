@@ -10,7 +10,7 @@ A Windows 11 hotkey daemon and borderless window manager. It replaces `binds.ahk
 ## Run
 
 ```powershell
-dotnet publish WindowManager -r win-x64 -o dist   # build dist\WindowManager.exe (single file, ~250 KB)
+dotnet publish WindowManager -p:PublishProfile=dist   # build dist\WindowManager.exe (self-contained single file, as repo-task-manager)
 dist\WindowManager.exe                              # runs in the background, no window
 ```
 
@@ -65,7 +65,7 @@ All files live in `%LOCALAPPDATA%\WindowManager\`.
 
 ## Updates
 
-A release copy of the program checks GitHub (`Artyom-kurguzkin/hotkeys-and-windowMax`, latest release) a minute after it starts and then every 24 hours, in the background. When the release is newer it downloads `WindowManager-win-x64.zip`, checks that it is a zip holding `WindowManager.exe`, and unpacks it into `%LOCALAPPDATA%\WindowManager\updates\v<version>\files`. Nothing is installed until you ask: the hotkey list (both Alts) then shows "Update <version> ready"; click it and the program quits the way Ctrl+Alt+Shift+Q does (windows restored), the program renames each file it replaces aside (`<name>.<ticks>.old`, which Windows allows even for the running exe and a `monlie.dll` other apps still map), copies the new ones in (a failure puts the old files back) and starts the new copy; the `.old` files are deleted on a later start once they unlock. No helper process or script: a hidden PowerShell helper got the exe quarantined by Defender. Every check and failure is a line in `wm.log` starting with `update:`.
+A release copy of the program checks GitHub (`Artyom-kurguzkin/hotkeys-and-windowMax`, latest release) a minute after it starts and then every 24 hours, in the background. When the release is newer it downloads `WindowManager-win-x64.zip`, checks that it is a zip holding `WindowManager.exe`, and unpacks it into `%LOCALAPPDATA%\WindowManager\updates\v<version>\files`. Nothing is installed until you ask: the hotkey list (both Alts) then shows "Update <version> ready"; click it and the program quits the way Ctrl+Alt+Shift+Q does (windows restored), a small PowerShell helper (the same as repo-task-manager's) swaps the files into the install folder (the old ones stay in `updates\previous`; a failed copy is rolled back) and starts the program again. A `monlie.dll` that other apps still map is renamed aside (`monlie.<ticks>.old`) instead of failing the update. The helper writes `updates\apply.log`, and every check and failure is a line in `wm.log` starting with `update:`.
 
 - A Debug build, a build between releases (version with a `-g<hash>` suffix), or a copy running from a project's `bin\` or `obj\` folder never updates itself; `wm.log` says why.
 - `WM_UPDATE_URL` points the check at another address (a demo or a test against a local fake); it must answer like GitHub's "latest release" call.

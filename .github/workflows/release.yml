@@ -40,10 +40,10 @@ jobs:
           "version=$v" >> $env:GITHUB_OUTPUT
           "Version: $v"
 
-      # Everything in the zip comes from this one publish: WindowManager.exe (single file, framework-dependent), web\, WebView2Loader.dll and
-      # monlie.dll (the csproj's CopyWebView2Loader / CopyMonlieDll targets copy them into the publish folder; monlie.dll is the committed binary).
+      # Everything in the zip comes from this one publish, the dist profile (as repo-task-manager): WindowManager.exe (self-contained single file, ReadyToRun), web\,
+      # WebView2Loader.dll and monlie.dll (the csproj's CopyWebView2Loader / CopyMonlieDll targets copy them into the publish folder; monlie.dll is the committed binary).
       - name: Publish
-        run: dotnet publish WindowManager -c Release -r win-x64 -o artifacts/dist
+        run: dotnet publish WindowManager -p:PublishProfile=dist -p:PublishDir=${{ github.workspace }}/artifacts/dist/
 
       - name: Zip
         shell: pwsh

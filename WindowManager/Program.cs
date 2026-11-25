@@ -91,6 +91,7 @@ static partial class Program
     // Monitor-lie: new model (apps go into their own fullscreen inside a slot we lie about) replacing the strip/crop
     // subsystem. UseLie gates the whole new path; crop stays compiled as a fallback until the lie is proven live.
     static readonly bool UseLie = true;
+    static System.Threading.Timer? heartbeat; // kept alive: a collected Timer stops firing
     static bool lieOn;                                              // the injected hook is installed
     static readonly HashSet<IntPtr> lie = [];                       // windows currently fullscreen into their slot
     static readonly HashSet<string> notCapable = new(StringComparer.OrdinalIgnoreCase); // processes whose F11 didn't fill a slot
@@ -135,7 +136,9 @@ static partial class Program
         if (args.Contains("--no-prefetch")) prefetchOn = false;
         Log.Init(Log.DefaultDir, args.Contains("--verbose"));
         AppDomain.CurrentDomain.UnhandledException += (_, e) => { Log.Info($"CRASH {e.ExceptionObject}"); CursorTheme.Restore(); };
-        Log.Info($"start pid={Environment.ProcessId} args=[{string.Join(' ', args)}]");
+        Log.Info($"start pid={Environment.ProcessId} args=[{string.Join(' ', args)}] version={AppVersion.Display} ({AppVersion.Informational}) exe={Environment.ProcessPath} runtime={System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription} runtime-dir={System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory()} os={Environment.OSVersion.Version}");
+        // heartbeat: the last one before a silent death says when it died (DeathCheck says why, on the next start)
+        heartbeat = new System.Threading.Timer(_ => { using var me = Process.GetCurrentProcess(); Log.Info($"alive: up {(DateTime.Now - me.StartTime).TotalMinutes:0} min, {me.WorkingSet64 >> 20} MB, {me.HandleCount} handles, {me.Threads.Count} threads"); }, null, TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(10));
         // Real pixel rects for every window on every monitor; without it Windows hands us DPI-virtualized coordinates.
         if (!SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) Log.Win32("SetProcessDpiAwarenessContext");
 
@@ -151,7 +154,7 @@ static partial class Program
         // it, and both stay running: one's masked Alt release is injected, the other ignores it and keeps Alt held.
         var startup = new Mutex(false, @"Local\WindowManagerStartup");
         try { startup.WaitOne(); } catch (AbandonedMutexException) { } // the holder died mid-start: ours now anyway
-        if (!Desk.Sandbox) { ReplaceRunningInstances(); RecoverFromDeadInstance(); } // a sandbox never touches another instance or its state
+        if (!Desk.Sandbox) { DeathCheck.CheckPrevious(); ReplaceRunningInstances(); RecoverFromDeadInstance(); DeathCheck.Mark(); } // a sandbox never touches another instance or its state
         new Thread(() =>
         {
             foreach (var send in outbox.GetConsumingEnumerable())
@@ -234,6 +237,7 @@ static partial class Program
         TablePopup.Shutdown();
         CursorTheme.Restore();
         State.Delete(State.DefaultPath); // clean exit: nothing left for a successor to undo
+        if (!Desk.Sandbox) DeathCheck.Clear();
         Log.Info("shutdown");
         if (Desk.Sandbox) FinishSandbox();
         return 0;

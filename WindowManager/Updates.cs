@@ -83,7 +83,7 @@ public sealed class UpdateChecker
     public UpdateChecker(HttpClient http, UpdateSetup setup, Func<UpdateApplication, bool>? launch = null)
     {
         (this.http, this.setup) = (http, setup);
-        this.launch = launch ?? UpdateHelper.Apply;
+        this.launch = launch ?? (apply => UpdateHelper.Launch(apply, Path.Combine(setup.UpdatesFolder, "apply.log")) is not null);
         own = SemVer.Parse(setup.Version);
         WhyNot = Decide(own, setup);
         Log.Info($"update: version {Current}; " + (WhyNot is null ? "this copy updates itself" : "it does not update itself: " + WhyNot));
@@ -243,12 +243,12 @@ public sealed class UpdateChecker
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log.Info($"update: could not remove {folder}: {e.Message}"); }
     }
 
-    /// <summary>Swaps the staged files in and starts the new exe. True when it did (the caller then quits); false when nothing is staged or the swap failed.</summary>
+    /// <summary>Starts the helper that swaps the staged files in once this process has ended and starts the app again. True when it started (the caller then quits); false when nothing is staged or it did not start.</summary>
     public bool Apply()
     {
         if (staged is null || applied) return false;
-        applied = launch(new UpdateApplication(staged, Path.GetDirectoryName(setup.ExePath)!, setup.ExePath));
-        Log.Info(applied ? $"update: installing {stagedVersion}" : $"update: could not install {stagedVersion}");
+        applied = launch(new UpdateApplication(staged, Path.GetDirectoryName(setup.ExePath)!, Path.Combine(setup.UpdatesFolder, "previous"), Environment.ProcessId, setup.ExePath));
+        Log.Info(applied ? $"update: installing {stagedVersion}" : $"update: could not start the helper for {stagedVersion}");
         return applied;
     }
 }
@@ -273,7 +273,6 @@ public static class Updates
             var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan }; // each request has its own limit
             checker = new UpdateChecker(client, UpdateSetup.ForThisRun());
             if (!checker.CanUpdate) return;
-            UpdateHelper.Sweep(Path.GetDirectoryName(Environment.ProcessPath!)!); // the files the last update renamed aside
             var run = checker;
             _ = Task.Run(async () =>
             {
@@ -290,7 +289,7 @@ public static class Updates
 
     public static (string Text, bool CanApply)? MenuLine() => checker?.MenuLine();
 
-    /// <summary>The menu's Update click: swap the files in and start the new exe, then quit cleanly so the windows are restored.</summary>
+    /// <summary>The menu's Update click: start the helper (it waits for this process to end), then quit cleanly so the windows are restored; the helper swaps the files and starts the app again.</summary>
     public static void ApplyNow()
     {
         try { if (checker?.Apply() == true) quit?.Invoke(); }
