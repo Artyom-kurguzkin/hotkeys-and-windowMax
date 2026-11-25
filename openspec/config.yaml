@@ -19,3 +19,8 @@ rules:
     - Scenario titles must be usable as test method names (short, imperative)
   tasks:
     - Each task that adds logic includes its unit test in the same task
+x-rtm:
+  statuses:
+    [Backlog, Planned, In Progress, Blocked, In Review, Completed]
+  features:
+    - window-manager

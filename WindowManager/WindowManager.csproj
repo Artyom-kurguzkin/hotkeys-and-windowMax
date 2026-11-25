@@ -6,11 +6,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <UseWindowsForms>true</UseWindowsForms> <!-- only for the hotkey list window -->
+    <UseWindowsForms>true</UseWindowsForms> <!-- only System.Windows.Forms.Screen in the live table self-test -->
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <!-- dotnet publish WindowManager -r win-x64 -o dist  →  dist\WindowManager.exe (uses the installed .NET 10 runtime) -->
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
+    <PublishReferencesDocumentationFiles>false</PublishReferencesDocumentationFiles> <!-- the WebView2 package's 800 KB of XML docs stay out of dist -->
   </PropertyGroup>
 
   <!-- The injected monitor-lie DLL (built by native/build-native.ps1, committed as a binary)
@@ -21,6 +22,48 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
   </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" GeneratePathProperty="true" />
+    <!-- The version: version.json (0.1 + git height) stamped as AssemblyInformationalVersion; AppVersion.cs reads it. Same as repo-task-manager. -->
+    <PackageReference Include="Nerdbank.GitVersioning" Version="3.9.50" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- AssemblyInformationalVersion is "0.1.12+commit" on every branch; whether this build came from main (publicReleaseRefSpec) is only known to
+       Nerdbank.GitVersioning's PublicRelease property, so it is stamped as assembly metadata for AppVersion.cs. -->
+  <Target Name="StampPublicRelease" DependsOnTargets="GetBuildVersion" BeforeTargets="CoreGenerateAssemblyInfo">
+    <ItemGroup>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>PublicRelease</_Parameter1>
+        <_Parameter2>$(PublicRelease)</_Parameter2>
+      </AssemblyAttribute>
+    </ItemGroup>
+  </Target>
+
+  <!-- The table editor and hotkey menu pages (WindowManager/web/**, served to WebView2 as https://wm.table/ and https://wm.hotkeys/) ship beside the exe, not inside the single file:
+       the popup maps the folder, so the files must be real files. Relative paths are kept, so the output has web\editor.html, web\css\ and so on. -->
+  <ItemGroup>
+    <None Remove="web\**" />
+    <Content Include="web\**" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+  </ItemGroup>
+
+  <!-- WebView2's native loader is not bundled into the single-file exe; it must sit beside it. An incremental publish once deleted it from dist
+       as a stale file (the popup then could not start: DllNotFoundException, 2026-11-20), so it is copied explicitly every time. -->
+  <Target Name="CopyWebView2Loader" AfterTargets="Build;Publish">
+    <ItemGroup>
+      <WebView2Loader Include="$(PkgMicrosoft_Web_WebView2)\runtimes\win-x64\native\WebView2Loader.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(WebView2Loader)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(WebView2Loader)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" Condition="'$(PublishDir)' != ''" />
+  </Target>
+
+  <!-- The running manager locks its exe in dist; Windows allows renaming a running exe, so move it aside before the bundle is written
+       (the running copy keeps working; the .old files are swept by UpdateHelper.Sweep and the del below once unlocked). -->
+  <Target Name="MoveRunningExeAside" BeforeTargets="GenerateSingleFileBundle" Condition="'$(PublishDir)' != ''">
+    <Exec Command="del /q &quot;$(PublishDir)$(AssemblyName).*.old&quot; 2&gt;nul" IgnoreExitCode="true" EchoOff="true" StandardOutputImportance="low" />
+    <Move SourceFiles="$(PublishDir)$(AssemblyName).exe" DestinationFiles="$(PublishDir)$(AssemblyName).$([System.DateTime]::Now.Ticks).old"
+          Condition="Exists('$(PublishDir)$(AssemblyName).exe')" ContinueOnError="true" />
+  </Target>
 
   <!-- The hook DLL stays mapped in every GUI process until each one next pumps a message, so the copy in the
        output folder is usually still in use when we rebuild. Windows allows renaming an in-use file, so move the

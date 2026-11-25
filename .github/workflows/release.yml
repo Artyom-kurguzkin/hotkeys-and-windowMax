@@ -1,0 +1,63 @@
+name: release
+
+# Every push to main builds and publishes a GitHub release named after the
+# Nerdbank.GitVersioning version (version.json: 0.1 + git height). The self-updater
+# reads the asset WindowManager-win-x64.zip from the latest release.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # Nerdbank.GitVersioning counts commits since version.json changed
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          dotnet tool install --global nbgv --version 3.9.50
+          $v = (nbgv get-version -v SemVer2).Trim()
+          "version=$v" >> $env:GITHUB_OUTPUT
+          "Version: $v"
+
+      # Everything in the zip comes from this one publish: WindowManager.exe (single file, framework-dependent), web\, WebView2Loader.dll and
+      # monlie.dll (the csproj's CopyWebView2Loader / CopyMonlieDll targets copy them into the publish folder; monlie.dll is the committed binary).
+      - name: Publish
+        run: dotnet publish WindowManager -c Release -r win-x64 -o artifacts/dist
+
+      - name: Zip
+        shell: pwsh
+        run: |
+          foreach ($f in "WindowManager.exe", "WebView2Loader.dll", "monlie.dll", "web/editor.html", "web/hotkeys.html") {
+            if (-not (Test-Path "artifacts/dist/$f")) { throw "the publish folder has no $f" }
+          }
+          Compress-Archive -Path "artifacts/dist/*" -DestinationPath WindowManager-win-x64.zip
+          Get-Item WindowManager-win-x64.zip
+
+      - name: Create the release
+        shell: pwsh
+        run: |
+          $tag = "v${{ steps.version.outputs.version }}"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) { "Release $tag already exists, nothing to do."; exit 0 }
+          gh release create $tag WindowManager-win-x64.zip --title $tag --target ${{ github.sha }} --generate-notes

@@ -1,0 +1,13 @@
+schema: spec-driven
+skip_specs: true
+created: 2026-11-26
+x-rtm:
+  id: 16
+  title: virtual desktop jumps
+  status: In Progress
+  priority: high
+  contributors: [Artyom-kurguzkin]
+  features: [window-manager]
+  label: bug
+  started: 2026-11-26
+  moved: 2026-11-26

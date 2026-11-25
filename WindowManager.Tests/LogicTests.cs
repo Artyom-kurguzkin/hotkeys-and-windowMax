@@ -136,6 +136,7 @@ public class HotkeysTests
     public void CtrlAltShiftQ_quits() => Assert.Equal(new Decision(true, Act.Quit), Chord('Q', Vk.LCtrl, Vk.LAlt, Vk.LShift));
 }
 
+[Collection("Log")] // Log is static; serialize with other Log.Init callers
 public class DiagnosticsTests
 {
     [Fact]

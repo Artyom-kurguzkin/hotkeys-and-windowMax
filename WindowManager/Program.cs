@@ -141,8 +141,11 @@ static partial class Program
 
         LoadCropOverrides();
         if (args.Contains("--dump")) { Dump(); return 0; }
-        if (args.Contains("--hotkeys")) { HelpWindow.ShowAndWait(); return 0; } // the list on its own, no hooks
+        if (args.Contains("--hotkeys")) { HelpPopup.ShowAndWait(); return 0; } // the list on its own, no hooks
         if (args.Contains("--lie-test")) { LieTest(args); return 0; }  // exercise the monitor-lie engine on one window
+        if (args.Contains("--test-taskview") && HandOffTaskViewTest()) return 0; // a running manager runs it (its PgUp/PgDn path is tested too); else this instance, primitives only
+        if (args.Contains("--test-taskview")) { TaskViewTest(); return 0; }
+        if (args.Contains("--test-table") && HandOffTableTest()) return 0; // a running manager runs it; else this instance does after startup
 
         // Two launches at once (a double-click) would each look for the other's message window before either created
         // it, and both stay running: one's masked Alt release is injected, the other ignores it and keeps Alt held.
@@ -206,6 +209,11 @@ static partial class Program
         if (Desk.Sandbox) StartSandbox(args); // pump + macro thread, once the loop below is about to run
         PostLoop(Hints.Warm);                          // first use of the scanner and the overlay costs ~100ms+: pay it now, not on the first Alt+F
         if (prefetchOn) StartTimer(TimerPrefetch, 1500); // and have the foreground window's labels ready from the start
+        if (tableTestOnStart) StartTimer(TimerTableTest, 1500);
+        TablePopup.Prewarm(); // the table editor: loaded now, shown in ~20 ms on /table (measured)
+        if (!Desk.Sandbox) WarmTableEditor();
+        HelpPopup.UpdateLine = Updates.MenuLine; HelpPopup.UpdateClicked = Updates.ApplyNow; // the menu shows what the updater is doing; its Update button applies
+        if (!Desk.Sandbox) Updates.Start(() => PostMessage(msgWnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero)); // checks 60 s after start, then daily; the quit is Ctrl+Alt+Shift+Q's own (PostMessage works from any thread)
 
         while (GetMessage(out var msg, IntPtr.Zero, 0, 0) > 0)
         {
@@ -223,6 +231,7 @@ static partial class Program
         if (mouseHook != IntPtr.Zero) UnhookWindowsHookEx(mouseHook);
         RestoreAll();
         if (lieOn) MonitorLie.Uninstall();
+        TablePopup.Shutdown();
         CursorTheme.Restore();
         State.Delete(State.DefaultPath); // clean exit: nothing left for a successor to undo
         Log.Info("shutdown");
@@ -307,6 +316,8 @@ static partial class Program
                     case WM_APP_INVOKE: DrainLoopQueue(); break;
                     case WM_APP_PREFETCH: PrefetchOnAlt(); break;
                     case WM_APP_HINTCACHE: OnHintCache(); break;
+                    case WM_APP_TABLETEST: StartTableTest(thenQuit: false); break;
+                    case WM_APP_TASKVIEWTEST: new Thread(TaskViewTest) { IsBackground = true, Name = "taskview-test" }.Start(); break;
                     case WM_APP_TOGGLE_MAX: ToggleMaximizeActive(Desk.Foreground()); break;
                     case WM_APP_OPDONE: // our op on wParam finished: the user acted on it, so it must be the foreground window
                         OpEnd(wParam);
@@ -358,13 +369,16 @@ static partial class Program
         {
             var k = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
             var down = (int)wParam is WM_KEYDOWN or WM_SYSKEYDOWN;
-            var injected = (k.flags & LLKHF_INJECTED) != 0;
+            // Keys from the end-to-end test carry TestInputTag and count as the user's (only while it runs): the real trigger / reopen path is tested.
+            var injected = (k.flags & LLKHF_INJECTED) != 0 && !(e2eRealInput && k.dwExtraInfo == TestInputTag);
             Log.Debug($"key vk=0x{k.vkCode:X2} {(down ? "down" : "up")}{(injected ? " injected" : "")}");
 
             // Modifier key-downs always pass, so the OS state is right for them (the key being fed isn't updated yet: skipped).
             if (down && !injected) keys.DropReleased(vk => vk == k.vkCode || (GetAsyncKeyState(vk) & 0x8000) != 0);
             if (down && !injected && k.vkCode == 0x09 && AltHeld) altTabbed = true;
             if (down && !injected && k.vkCode is Vk.LAlt or Vk.RAlt && !AltHeld) { Desk.GetCursor(out altDownPos); prevActive = Desk.Foreground(); PostMessage(msgWnd, WM_APP_PREFETCH, IntPtr.Zero, IntPtr.Zero); }
+            if (!injected && TablePopup.Writing && !Vk.IsModifier((int)k.vkCode)) { heldBack.Enqueue(new KeyStroke((int)k.vkCode, !down)); return 1; } // a live table write has the focus in the app for a moment: these keys belong to the editor, replayed after it
+            if (!injected && TaskViewEnter((int)k.vkCode, down)) return 1;
             if (!injected && RouteHint((int)k.vkCode, down)) return 1; // F toggles hints / letters pick / Esc hides
             var d = keys.Feed((int)k.vkCode, down, injected, k.time);
             if (d.MaskFirst)
@@ -375,9 +389,26 @@ static partial class Program
             if (d.Act != Act.None) Run(d.Act, d.Arg);
             if (!down && !injected && k.vkCode is Vk.LAlt or Vk.RAlt) OnAltReleased();
             if (d.Suppress || d.MaskFirst) return 1;
+            if (down && !injected && d.Act == Act.None) { if (SlashTyped(k)) OpenTableEditor(typed: true); else ReeditKey((int)k.vkCode); }
         }
         catch (Exception e) { Log.Info($"keyboard hook error: {e}"); }
         return CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
+    }
+
+    // Set by PgUp/PgDn inside Task View (Run, DesktopLeft/Right). Task View then has its focus on the "Desktop 1" tile, so the user's Enter would land there:
+    // it is swallowed and Esc sent instead, which closes Task View on the switched desktop. Any other key (arrows, Tab: the user picks something) clears it.
+    static volatile bool taskViewSwitched;
+    static bool swallowEnterUp;
+    static bool TaskViewEnter(int vk, bool down)
+    {
+        if (!down && vk == Vk.Enter && swallowEnterUp) { swallowEnterUp = false; return true; }
+        if (!taskViewSwitched || !down || Vk.IsModifier(vk) || vk is Vk.PgUp or Vk.PgDn) return false;
+        taskViewSwitched = false;
+        if (vk != Vk.Enter || keys.Held.Length > 0 || !VirtualDesktops.IsTaskView(Frames.ClassName(Desk.Foreground()))) return false;
+        swallowEnterUp = true;
+        Log.Info("task view: Enter after a desktop switch, sent as Esc");
+        Inject(() => Send(KeyEngine.Tap(Vk.Esc)));
+        return true;
     }
 
     static void Run(Act act, int arg = 0)
@@ -452,7 +483,18 @@ static partial class Program
             case Act.DesktopLeft or Act.DesktopRight when !Desk.Sandbox: // the sandbox records the keystroke instead
                 Inject(() =>
                 {
-                    if (VirtualDesktops.Switch(act == Act.DesktopRight)) return;
+                    var taskView = VirtualDesktops.IsTaskView(Frames.ClassName(Desk.Foreground()));
+                    if (!taskView && VirtualDesktops.Switch(act == Act.DesktopRight)) return;
+                    if (taskView)
+                    {
+                        // Inside Task View a desktop switch (API or Ctrl+Win+Left/Right) does move the desktop, but Task View then puts the keyboard focus
+                        // on the "Desktop 1" tile of its strip, so Enter went to the first desktop; Esc lands on the switched one (--test-taskview,
+                        // 2026-11-26). So: switch, and the Enter that follows is sent as Esc (KeyboardHookCore, taskViewSwitched).
+                        if (!VirtualDesktops.Switch(act == Act.DesktopRight)) Send([.. KeyEngine.Lift(held), .. KeyEngine.Output(act), .. KeyEngine.Restore(held, keys.Held)]);
+                        taskViewSwitched = true;
+                        Log.Info("task view open: switched the desktop; the next Enter closes Task View with Esc");
+                        return;
+                    }
                     Send([.. KeyEngine.Lift(held), .. KeyEngine.Output(act), .. KeyEngine.Restore(held, keys.Held)]);
                 });
                 break;
@@ -498,6 +540,7 @@ static partial class Program
             if (h != IntPtr.Zero && Desk.Foreground() == h) MaybeEnterLie(h); // still foreground: a real activation
         }
         else if (id == TimerPrefetch) { KillTimer(msgWnd, id); PrefetchHints("foreground settled"); }
+        else if (id == TimerTableTest) { KillTimer(msgWnd, id); StartTableTest(thenQuit: true); }
         else if (id == TimerSettle) { KillTimer(msgWnd, id); RepairMoveBack(); StartTimer(TimerRepair, RepairDelayMs); }
         else if (id == TimerRepair) { KillTimer(msgWnd, id); RepairRecrop(); }
         else if (id == TimerWatchdog) { if (scroller.InGesture && !AltHeld) StopGesture("watchdog"); }
@@ -547,6 +590,7 @@ static partial class Program
     static void HoverFocus()
     {
         if (AltHeld) return;
+        if (TablePopup.IsShown) return; // the table editor has the keyboard: the pointer passing over another window must not close it
         Desk.GetCursor(out var pt);
         var moved = pt.X != lastHoverPos.X || pt.Y != lastHoverPos.Y; lastHoverPos = pt;
         var hwnd = GetAncestor(WindowFromPoint(pt), GA_ROOT);
@@ -1277,6 +1321,7 @@ static partial class Program
                     // A managed window the user activated: put it into its slot - but only once it has STAYED
                     // foreground for ActivateSettleMs (see pendingFg), so a focus bounce from our own toggles can't
                     // trigger a probe on a bystander. (Deferred entry: nothing is fullscreened at startup.)
+                    slash.Reset(); // typed text continues in another control
                     if (hints.Active) HideHints(); // the badges were laid out for the previous foreground
                     if (prefetchOn) StartTimer(TimerPrefetch, PrefetchSettleMs); // work the labels out for the new window before they are asked for
                     if (UseLie && managed.ContainsKey(hwnd)) { pendingFg = hwnd; StartTimer(TimerActivate, ActivateSettleMs); }
@@ -1599,7 +1644,7 @@ static partial class Program
     // ---- both Alts: list every hotkey ----
 
     // Runs on its own UI thread, so it never blocks the hook thread.
-    static void ShowHelp() => Log.Info(HelpWindow.Toggle(Desk.Foreground()) ? "hotkey list opened" : "hotkey list closed");
+    static void ShowHelp() => Log.Info(HelpPopup.Toggle(Desk.Foreground()) ? "hotkey list opened" : "hotkey list closed");
 
     // ---- sleep and display changes ----
 
@@ -1956,6 +2001,8 @@ static partial class Program
     // Raw input still arrives for swallowed moves (measured), which is what drives the scrolling.
     static IntPtr MouseHook(int nCode, IntPtr wParam, IntPtr lParam)
     {
+        if (nCode >= 0 && (int)wParam is WM_LBUTTONDOWN or WM_RBUTTONDOWN or WM_MBUTTONDOWN) slash.Reset(); // the caret moved
+        if (nCode >= 0 && (int)wParam == WM_LBUTTONUP) QueueReeditCheck(); // a click may have put the caret in a table
         if (nCode >= 0 && (int)wParam == WM_MOUSEMOVE && scroller.InGesture && AltHeld)
         {
             var info = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);

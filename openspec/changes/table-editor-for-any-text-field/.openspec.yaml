@@ -1,0 +1,13 @@
+schema: spec-driven
+created: 2026-11-20
+x-rtm:
+  id: 15
+  title: Table editor for any text field (Win+Alt+T)
+  status: In Review
+  contributors: [Claude]
+  label: feature
+  started: 2026-11-20
+  moved: 2026-11-20
+  tests: [{suite: MdTableTests, test: WindowManager.Tests.MdTableTests.Format_aligns_a_ragged_table_every_column_padded_to_its_widest_cell_the_separator_as_wide}, {suite: MdTableTests, test: WindowManager.Tests.MdTableTests.Paste_of_a_tab_separated_block_fills_cells_from_the_selection_and_grows_the_table_in_both_directions}, {suite: MdTableTests, test: WindowManager.Tests.MdTableTests.Sort_compares_numbers_as_numbers_keeps_empty_cells_last_and_equal_cells_in_their_order}, {suite: ClipboardTableTests, test: WindowManager.Tests.ClipboardTableTests.The_CF_HTML_header_offsets_are_byte_exact_in_UTF_8}, {suite: ClipboardTableTests, test: WindowManager.Tests.ClipboardTableTests.A_tab_separated_block_is_a_table_whose_first_row_is_the_header}, {suite: ClipboardTableTests, test: WindowManager.Tests.ClipboardTableTests.An_html_table_is_parsed_cells_decoded_tags_inside_cells_dropped}, {suite: ClipboardTableTests, test: WindowManager.Tests.ClipboardTableTests.Writing_for_Word_puts_html_and_the_pipe_text_on_the_clipboard_focuses_the_window_pastes_then_restores}, {suite: ClipboardTableTests, test: WindowManager.Tests.ClipboardTableTests.Writing_for_a_text_target_puts_only_the_formatted_pipe_table_on_the_clipboard}, {suite: ClipboardTableTests, test: WindowManager.Tests.ClipboardTableTests.Reading_the_selection_copies_it_parses_it_and_gives_the_users_clipboard_back}, {suite: TableEditorTests, test: WindowManager.Tests.TableEditorTests.Tab_in_the_last_cell_adds_a_column_and_moves_into_it}, {suite: TableEditorTests, test: WindowManager.Tests.TableEditorTests.Enter_moves_down_and_on_the_last_row_adds_a_row}, {suite: TableEditorTests, test: WindowManager.Tests.TableEditorTests.Typing_into_a_cell_then_OK_gives_the_edited_pipe_table}, {suite: TableEditorHotkeyTests, test: WindowManager.Tests.TableEditorHotkeyTests.WinAltT_opens_the_table_editor_and_swallows_the_key}]
+  agentBy: Claude chunk table-in
+  agentAt: 2026-11-20T06:07:19

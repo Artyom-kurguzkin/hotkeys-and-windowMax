@@ -1,0 +1,13 @@
+schema: spec-driven
+skip_specs: true
+created: 2026-11-26
+x-rtm:
+  id: 17
+  title: Hotkey menu styled like the table editor, with the semantic version
+  status: In Review
+  contributors: [Claude]
+  features: [window-manager]
+  label: feature
+  started: 2026-11-26
+  moved: 2026-11-26
+  plan: DevResources/plans/hotkey-menu-version-updates-2026-11-26.md

@@ -1,0 +1,9 @@
+2026-11-26T04:52:31 | Artyom-kurguzkin | created | New work item
+2026-11-26T04:52:31 | Artyom-kurguzkin | status | Planned -> In Progress
+2026-11-26T04:52:47 | Artyom-kurguzkin | title | New work item -> virtual desktop jumps
+2026-11-26T04:53:57 | Artyom-kurguzkin | description-edited | proposal.md
+2026-11-26T04:54:32 | Artyom-kurguzkin | feature | none -> window-manager
+2026-11-26T04:54:40 | Artyom-kurguzkin | priority | low -> high
+2026-11-26T04:54:42 | Artyom-kurguzkin | label | none -> bug
+2026-11-26T05:13:43 | Claude | subtask-done | 1.1 Cause: SwitchDesktop under Task View
+2026-11-26T05:13:43 | Claude | subtask-done | 1.2 Fix: keystroke while Task View is open

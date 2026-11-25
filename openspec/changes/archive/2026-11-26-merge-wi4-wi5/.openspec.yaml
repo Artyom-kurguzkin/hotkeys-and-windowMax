@@ -3,6 +3,8 @@ created: 2026-10-31
 x-rtm:
   id: 11
   title: better mouse control + custom styling
-  status: In Review
+  status: In Progress
   contributors: [Artyom-kurguzkin]
+  started: 2026-11-20
+  moved: 2026-11-26
   mergedFrom: [4, 5]

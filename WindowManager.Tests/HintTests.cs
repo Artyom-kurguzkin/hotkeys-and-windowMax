@@ -14,13 +14,21 @@ public class HintTests
     }
 
     [Fact]
-    public void Labels_become_pairs_beyond_the_alphabet() // first letter = group, like the web version
+    public void Beyond_the_alphabet_single_letters_come_first_then_pairs()
     {
-        var l = HintEngine.LabelsFor(27);
-        Assert.Equal("aa", l[0]);
-        Assert.Equal("as", l[1]);
-        Assert.Equal("sa", l[25]);
-        Assert.Equal(27, l.Distinct().Count());
+        var l = HintEngine.LabelsFor(27);   // 24 singles, then pairs on the 25th letter
+        Assert.Equal("a", l[0]);
+        Assert.Equal("n", l[23]);
+        Assert.Equal("ma", l[24]);
+        Assert.Equal("ms", l[25]);
+        foreach (var n in new[] { 26, 27, 50, 100, 200, 400, 625 })
+        {
+            var ls = HintEngine.LabelsFor(n);
+            Assert.Equal(n, ls.Distinct().Count());
+            Assert.True(ls.Count(x => x.Length == 1) > 0 || n > 600, $"{n}: no single letters");
+            Assert.DoesNotContain(ls, a => ls.Any(b => b != a && b.StartsWith(a))); // no label is a prefix of another
+            Assert.Equal(ls.OrderBy(x => x.Length).ToArray(), ls);                 // singles first
+        }
     }
 
     [Fact]
@@ -32,11 +40,11 @@ public class HintTests
     [Fact]
     public void Typing_narrows_and_dims_the_rest()
     {
-        var h = new HintEngine(); h.Show(30);          // pairs: aa as ad ...
-        Assert.Equal(HintEngine.Step.Narrowed, h.Type('a', false).Step);
+        var h = new HintEngine(); h.Show(30);          // 24 singles, then ma ms md ... (m is a group)
+        Assert.Equal(HintEngine.Step.Narrowed, h.Type('m', false).Step);
         Assert.True(h.Active);
-        Assert.False(h.Dim("as"));                      // still possible
-        Assert.True(h.Dim("sa"));                       // ruled out
+        Assert.False(h.Dim("ms"));                      // still possible
+        Assert.True(h.Dim("a"));                        // ruled out
     }
 
     [Fact]

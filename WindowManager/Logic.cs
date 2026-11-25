@@ -5,7 +5,7 @@ namespace WindowManager;
 public static class Vk
 {
     public const int Shift = 0x10, Ctrl = 0x11, Alt = 0x12;
-    public const int Enter = 0x0D, Esc = 0x1B, PgUp = 0x21, PgDn = 0x22, End = 0x23, Home = 0x24, Left = 0x25, Up = 0x26, Right = 0x27, Down = 0x28;
+    public const int Back = 0x08, Tab = 0x09, Enter = 0x0D, Esc = 0x1B, PgUp = 0x21, PgDn = 0x22, End = 0x23, Home = 0x24, Left = 0x25, Up = 0x26, Right = 0x27, Down = 0x28;
     public const int Ins = 0x2D, Del = 0x2E, LWin = 0x5B, RWin = 0x5C, Apps = 0x5D;
     public const int LShift = 0xA0, RShift = 0xA1, LCtrl = 0xA2, RCtrl = 0xA3, LAlt = 0xA4, RAlt = 0xA5;
     public const int OemOpen = 0xDB, OemClose = 0xDD; // [ and ]
@@ -98,6 +98,7 @@ public sealed class KeyEngine
         ("Text editing", "Alt+O", "New line below"),
         ("Text editing", "Alt+Z  /  Alt+C", "Context menu / left click"),
         ("Text editing", "Left Alt+X", "Escape"),
+        ("Text editing", "type /table", "Table editor: size picker, then the grid; closing writes the table. Caret back into a table reopens the grid"),
         ("Program", "Both Alt keys", "Show this list"),
         ("Program", "Ctrl+Alt+Shift+Q", "Quit and restore all windows"),
     ];
@@ -313,6 +314,42 @@ public record struct Rect(int Left, int Top, int Right, int Bottom)
     public readonly (int X, int Y) Center => (Left + Width / 2, Top + Height / 2);
     public readonly Rect Offset(int dx, int dy) => new(Left + dx, Top + dy, Right + dx, Bottom + dy);
     public override readonly string ToString() => $"({Left},{Top} {Width}x{Height})";
+}
+
+// Watches what the user types for a slash command (`/table`), fed from the keyboard hook with the characters each key produces.
+// Fires on the key that completes the command when it stands at a word start: the first thing typed since the last boundary
+// (Enter, Tab, an arrow, a click, a focus change, a chord) or right after whitespace. This is only the cheap pre-check: the caller
+// then selects the typed characters and copies them to see that the control really holds the command before acting.
+public sealed class SlashTrigger(string command = "/table")
+{
+    readonly System.Text.StringBuilder typed = new();
+    readonly object gate = new();
+
+    public string Command => command;
+
+    public void Reset() { lock (gate) typed.Clear(); }
+    public void Backspace() { lock (gate) if (typed.Length > 0) typed.Length--; }
+
+    // True when `c` completed the command.
+    public bool Type(char c)
+    {
+        if (char.IsControl(c)) { Reset(); return false; }
+        lock (gate)
+        {
+            typed.Append(c);
+            if (typed.Length > command.Length + 1) typed.Remove(0, typed.Length - command.Length - 1);
+            var s = typed.ToString();
+            if (!s.EndsWith(command, StringComparison.Ordinal)) return false;
+            var before = s.Length - command.Length;
+            if (before > 0 && !char.IsWhiteSpace(s[before - 1])) return false;
+            typed.Clear();
+            return true;
+        }
+    }
+
+    // Keys that move the caret or end the word: the next character starts afresh.
+    public static bool IsBoundary(int vk) => vk is Vk.Enter or Vk.Tab or Vk.Esc or Vk.PgUp or Vk.PgDn or Vk.End or Vk.Home
+        or Vk.Left or Vk.Up or Vk.Right or Vk.Down or Vk.Ins or Vk.Del;
 }
 
 public static class Focus
@@ -726,13 +763,18 @@ public sealed class HintEngine
     public string Typed { get; private set; } = "";
     public IReadOnlyList<string> Labels { get; private set; } = [];
 
-    // Same scheme as the web version: single letters while they last, then pairs whose first letter is the group.
+    // Single letters first (the first targets: the foreground window's), then pairs. As many singles as still leave enough pairs:
+    // s singles + (k - s) prefixes * k pairs >= n. A pair never starts with a single's letter, so no label is a prefix of another.
+    // ponytail: n is capped at 400 by the scan, under k*k = 625; past that labels would need three letters.
     public static string[] LabelsFor(int n)
     {
-        if (n <= Chars.Length) return [.. Chars[..n].Select(c => c.ToString())];
-        var o = new string[n];
-        for (var i = 0; i < n; i++) o[i] = $"{Chars[i / Chars.Length % Chars.Length]}{Chars[i % Chars.Length]}";
-        return o;
+        var k = Chars.Length;
+        var singles = Math.Clamp((k * k - n) / (k - 1), 0, Math.Min(n, k));
+        var o = new List<string>(n);
+        o.AddRange(Chars[..singles].Select(c => c.ToString()));
+        for (var p = singles; p < k && o.Count < n; p++)
+            for (var c = 0; c < k && o.Count < n; c++) o.Add($"{Chars[p]}{Chars[c]}");
+        return [.. o];
     }
 
     public void Show(int count) { Active = true; Typed = ""; Labels = LabelsFor(count); }
@@ -936,9 +978,11 @@ public static class CursorArt
 
     static Pt Lerp(Pt a, Pt b, double t) => new(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t);
 
-    // The browser draws the 40px cursor at 40 * devicePixelRatio; same here with the display's DPI.
-    public static int PixelSize(uint dpi) => Scale(Size, dpi);
-    public static (int X, int Y) Hotspot(Shape s, uint dpi) => (Scale(s.HotX, dpi), Scale(s.HotY, dpi));
+    // Drawn at DrawPx CSS px, not the website's 40: at 40 the arrow reached past where Windows and browsers put tooltips (they assume the
+    // standard 32px cursor), so it covered them. Scaled with the display's DPI. Tuning knob: smaller = smaller pointer.
+    public const double DrawPx = 28;
+    public static int PixelSize(uint dpi) => Scale(DrawPx, dpi);
+    public static (int X, int Y) Hotspot(Shape s, uint dpi) => (Scale(s.HotX * DrawPx / Size, dpi), Scale(s.HotY * DrawPx / Size, dpi));
     // The system's current standard arrow is ours if it has our size and hotspot (Windows' own arrow has its hotspot
     // at the very tip, 0,0, and a different size).
     public static bool IsOurs(int hotX, int hotY, int width, uint dpi) =>

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<title>WindowManager hotkeys</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="css/app.css">
+<style>
+  /* One quiet panel (cheat-sheet conventions: GNOME help overlay, GitHub/Primer, Linear): grouped by workflow, the action on the left,
+     its keys right-aligned as small neutral caps, hairlines between rows, colour only as a dot on each section label.
+     The host clips the transparent window to .panel (hotkeys.js "shape"), so only the panel is ever seen. Tokens and .btn come from app.css. */
+  html, body { background: transparent; }
+  body::before { display: none; }
+  body { padding: 0; }
+
+  .panel { width: 1000px; background: var(--card); border: 1px solid var(--line-soft); border-radius: var(--r); padding: 18px 26px 22px; }
+
+  .head { display: flex; align-items: center; gap: 10px; padding-bottom: 14px; border-bottom: 1px solid var(--line-soft); }
+  .head h1 { font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+  .head .ver { font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .head .upd { display: flex; align-items: center; gap: 10px; margin-left: auto; font-size: 13px; }
+  .head .btn { min-height: 28px; padding: 0 14px; font-size: 13px; font-weight: 600; }
+  .head .esc { margin-left: auto; font-size: 12.5px; color: var(--ink-2); white-space: nowrap; display: flex; align-items: center; gap: 6px; }
+  .head .upd:not([hidden]) + .esc { margin-left: 16px; }
+
+  .cols { columns: 2; column-gap: 44px; margin-top: 6px; }
+  .section { break-inside: avoid; padding-top: 14px; }
+  .section h3 { display: flex; align-items: center; gap: 8px; margin-bottom: 4px;
+                font-size: 11.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); }
+  .section h3::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--dot); }
+
+  .row { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center; padding: 6px 0; }
+  .row + .row { border-top: 1px solid color-mix(in srgb, var(--line-soft) 55%, transparent); }
+  .w { font-size: 13.5px; line-height: 1.4; }
+
+  .k { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 3px; max-width: 250px; }
+  kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 6px;
+        font: 600 11.5px/1 var(--f-body); color: var(--ink); white-space: nowrap;
+        background: var(--paper); border: 1px solid var(--line-soft); border-bottom-width: 2px; border-radius: 5px; }
+  .k .sep { font-size: 11.5px; color: var(--ink-2); padding: 0 2px; }
+  .k .note { font-size: 11.5px; color: var(--ink-2); white-space: nowrap; padding-left: 2px; }
+</style>
+</head>
+<body>
+<div class="panel">
+  <div class="head">
+    <h1 id="title">WindowManager</h1>
+    <span class="ver" id="version"></span>
+    <div class="upd" id="upd" hidden><span id="upd-text"></span><button class="btn" data-sk id="upd-btn" hidden>Update</button></div>
+    <span class="esc"><kbd>Esc</kbd> to close</span>
+  </div>
+  <div class="cols" id="cols"></div>
+</div>
+<script src="js/hotkeys.js"></script>
+</body>
+</html>

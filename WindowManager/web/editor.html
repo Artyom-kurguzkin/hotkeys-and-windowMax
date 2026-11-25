@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<title>Table editor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="css/app.css">
+<style>
+  /* Only what the old note page's tile got from its surroundings. The host clips the window to the cards (see host.js "shape"), so everything outside
+     them is never shown; the background is transparent, not --paper. */
+  html, body { background: transparent; }
+  body::before { display: none; }
+  /* room above the tile for the floating ribbon (md-editor's place() puts it over the table), the picker opens below / right of the caret */
+  body { padding: 90px 0 0 12px; }
+  /* The tile and the textarea are app.css's own (.tile, textarea.desc-in, and the focus shadow .tile:has(> textarea.desc-in):focus-within),
+     as on the old note page; host.js only sets their width and height to the content. */
+  .tile > textarea.desc-in { flex: none; width: 100%; overflow-y: hidden; }
+
+  /* Style review (DevResources/plans/table-editor-style-review-2026-11-20.md), design-system tokens only. On the old page the grid sat inside
+     the tile, which gave it its frame and its --paper ground; lifted out of the tile it was a bare white block. */
+  /* 1. the grid overlay is an elevated card like the ribbon and the picker: 2px --line outline, --r radius, hard 4px --shadow. The -2px margin
+        keeps its rows on the table's lines in spite of the border. */
+  .md-ov { clip-path: none !important; width: fit-content !important; height: auto !important; margin: -2px 0 0 -2px;
+    background: var(--card) !important; border: 2px solid var(--line); border-radius: var(--r); }
+  .md-ov .md-gx { border-radius: calc(var(--r) - 2px); overflow: hidden; }
+  /* 2. every floating card carries its own --paper mat (the cards always stood on --paper; on a dark app the outline and shadow vanished) */
+  .md-pop, .md-ov { box-shadow: 4px 4px 0 var(--shadow), 4px 4px 0 6px var(--paper), 0 0 0 6px var(--paper); }
+  /* 3. the ribbon sits one spacing step above the grid card instead of 6px off its edge */
+  .md-bar { margin-top: -8px; }
+</style>
+</head>
+<body>
+<div class="tile" data-tile="note"><textarea class="desc-in"></textarea></div>
+<script>window.rtm = {};</script>
+<script src="js/md-table.js"></script>
+<script src="js/md-editor.js"></script>
+<script src="js/host.js"></script>
+</body>
+</html>

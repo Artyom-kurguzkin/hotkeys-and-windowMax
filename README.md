@@ -18,7 +18,7 @@ dist\WindowManager.exe                              # runs in the background, no
 |---|---|
 | `--verbose` | Also log every raw key and TrackPoint sample |
 | `--dump` | Print every window and how it would be handled, then exit (changes nothing) |
-| `--hotkeys` | Show the hotkey table on its own, then exit |
+| `--hotkeys` | Show the hotkey menu on its own, then exit |
 
 - Starting it again replaces every running instance. Each old instance is asked to quit, so it restores its windows. One that doesn't respond within 3 s is terminated, and the new instance repairs the windows it left behind, using `state.json`.
 - Quit with **Ctrl+Alt+Shift+Q**. This restores every window's title bar, border and position.
@@ -26,13 +26,17 @@ dist\WindowManager.exe                              # runs in the background, no
 - To start it at logon, put a shortcut to `dist\WindowManager.exe` in `shell:startup`. To manage windows that run as administrator, run it elevated instead, for example from a Task Scheduler task with "Run with highest privileges".
 - The exe needs the .NET 10 runtime. Add `--self-contained` to the publish command for a roughly 70 MB exe that runs without it.
 
+### Releases
+
+The version is `0.1.<git height>`, stamped by Nerdbank.GitVersioning from `version.json` (the same scheme as repo-task-manager) and shown in the hotkey menu. A build from `main` has a plain version (`0.1.12`); a build from any other branch, or a Debug build, carries a `-g<commit>` suffix or reads as a local build. Every push to `main` runs `.github/workflows/release.yml`, which publishes `WindowManager-win-x64.zip` (the exe, `web\`, `WebView2Loader.dll`, `monlie.dll`) as the GitHub release `v<version>`. Unzip it anywhere and run `WindowManager.exe`.
+
 ## Hotkeys
 
 | Keys | Action |
 |---|---|
 | Alt+Q or Win+Alt+X / Alt+M / Alt+N | Close (like Alt+F4) / maximize or restore / minimize the active window |
 | Alt, Alt, Alt (quickly) | Flash a border in the accent colour around the active window |
-| Both Alt keys | Show the hotkey table (also: `WindowManager.exe --hotkeys`) |
+| Both Alt keys | Show the hotkey menu: every hotkey in cards styled like the table editor, with the running version (for example 0.1.12). Esc, both Alt keys again or a click elsewhere closes it (also: `WindowManager.exe --hotkeys`) |
 | Alt+T | Show or hide the title bar and tab strip of the active window |
 | Win+Alt (tap) | Show or hide the cropped tab strip of the active window |
 | Ctrl+Win+Alt (tap) | Open Snap Layouts (Win+Z) to tile the active window |
@@ -43,6 +47,7 @@ dist\WindowManager.exe                              # runs in the background, no
 | Alt+O | New line below (End, Shift+Enter) |
 | Alt+Z / Alt+C | Context-menu key / left click |
 | Left Alt+X | Escape |
+| type `/table` | Table editor, as in repo-task-manager: typing `/table` at the start of a line or after a space in a text control opens the size picker at the caret (arrows / mouse, Enter inserts, Esc types `/table` back), then the grid with its ribbon (rows, columns, alignment, sort, Edit as text), A/B/C and 1/2/3 headers, in-place editing and Ctrl+C/X/V. Closing it (Esc, clicking elsewhere) writes the table (HTML for a new table in Word and Google Docs, a pipe table elsewhere); the app's Ctrl+Z undoes it. Put the caret back in a pipe table and an "Edit table" chip appears above it to reopen the grid (apps with UI Automation text support: Notepad, Word, browser text fields). `WindowManager.exe --test-table` runs it all on a Notepad it opens and writes `tests\out\table-selftest.md` |
 | PageUp / PageDown | Previous / next virtual desktop |
 | Ctrl+Alt+Shift+Q | Quit and restore all windows |
 
@@ -57,6 +62,14 @@ All files live in `%LOCALAPPDATA%\WindowManager\`.
 | `wm.log` | Every decision: windows stripped or skipped (and why), crops, hotkey actions, Win32 failures. It rotates to `wm.log.old` past 5 MB |
 | `crop.json` | Optional, hand-edited, e.g. `{ "Notepad": 44 }`: per-app crop heights in DPI-independent units (process name → units), overriding `Crop.Defaults`. The program never writes it |
 | `state.json` | Windows the running instance has changed: original style, crop slot and backdrop. It exists only while the program runs. If one is left behind, the next start undoes those changes |
+
+## Updates
+
+A release copy of the program checks GitHub (`Artyom-kurguzkin/hotkeys-and-windowMax`, latest release) a minute after it starts and then every 24 hours, in the background. When the release is newer it downloads `WindowManager-win-x64.zip`, checks that it is a zip holding `WindowManager.exe`, and unpacks it into `%LOCALAPPDATA%\WindowManager\updates\v<version>\files`. Nothing is installed until you ask: the hotkey list (both Alts) then shows "Update <version> ready"; click it and the program quits the way Ctrl+Alt+Shift+Q does (windows restored), the program renames each file it replaces aside (`<name>.<ticks>.old`, which Windows allows even for the running exe and a `monlie.dll` other apps still map), copies the new ones in (a failure puts the old files back) and starts the new copy; the `.old` files are deleted on a later start once they unlock. No helper process or script: a hidden PowerShell helper got the exe quarantined by Defender. Every check and failure is a line in `wm.log` starting with `update:`.
+
+- A Debug build, a build between releases (version with a `-g<hash>` suffix), or a copy running from a project's `bin\` or `obj\` folder never updates itself; `wm.log` says why.
+- `WM_UPDATE_URL` points the check at another address (a demo or a test against a local fake); it must answer like GitHub's "latest release" call.
+- Sandbox mode never checks.
 
 ## Troubleshooting
 
@@ -104,7 +117,9 @@ The reasoning behind each decision, including the measurements from the spikes, 
 | `WindowManager/Frames.cs` | Win32 operations on other windows (style, DWM border/backdrop/frame, region, moves, monitors) |
 | `WindowManager/Program.cs` | Message loop, hooks, WinEvents, timers, input sender, border overlay, moves between monitors. Applies the decisions and logs each one |
 | `WindowManager/State.cs` | `state.json` persistence and recovery after a terminated instance |
-| `WindowManager/HelpWindow.cs` | The themed hotkey table (WinForms ListView, light/dark) |
+| `WindowManager/HelpPopup.cs`, `web/hotkeys.html`, `web/js/hotkeys.js` | The hotkey menu: a WebView2 popup drawn with the table editor's own stylesheet (cards, light only), clipped to the cards, kept hidden for reuse |
+| `WindowManager/AppVersion.cs`, `version.json` | The version shown in the menu: Nerdbank.GitVersioning's AssemblyInformationalVersion, without the `+commit` |
+| `WindowManager/MdTable.cs`, `ClipboardTable.cs`, `TableEditor.cs`, `Program.Table.cs` | The `/table` table editor: pure pipe-table functions (port of repo-task-manager's md-table.js), reading a table from the clipboard and writing it back (CF_HTML for Word and Google Docs), the WinForms grid, and the hotkey thread |
 | `WindowManager/CursorTheme.cs` | The hand-drawn cursors: GDI+ rendering of the portfolio's SVG paths, swapped in with `SetSystemCursor` |
 | `WindowManager/Native.cs`, `Log.cs` | P/Invoke declarations, logging |
 | `WindowManager.Tests/` | xUnit tests. Most are pure-logic tests named after spec scenarios. The Win32 tests use windows the test creates itself, never your apps |

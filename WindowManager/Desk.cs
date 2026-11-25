@@ -141,6 +141,18 @@ static class Desk
 
     // Posted to the foreground window as ordinary key messages (a best-effort delivery for fixtures that count them);
     // the recorded stroke is what the assertions use. Modifiers are tracked here so system keys get WM_SYS* messages.
+    // Text as Unicode key events (KEYEVENTF_UNICODE): layout-independent, what espanso types with. Not for the sandbox.
+    public static void SendText(string text)
+    {
+        if (text.Length == 0 || Sandbox) return;
+        var inputs = text.SelectMany(c => new[] { false, true }.Select(up => new INPUT
+        {
+            type = INPUT_KEYBOARD,
+            u = new InputUnion { ki = new KEYBDINPUT { wScan = c, dwFlags = KEYEVENTF_UNICODE | (up ? KEYEVENTF_KEYUP : 0) } },
+        })).ToArray();
+        if (SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>()) != inputs.Length) Log.Win32("SendInput(text)");
+    }
+
     public static void SendKeys(KeyStroke[] strokes)
     {
         if (strokes.Length == 0) return;
@@ -154,6 +166,9 @@ static class Desk
                     ki = new KEYBDINPUT
                     {
                         wVk = (ushort)s.Vk,
+                        // The scan code too: VS Code dispatches its shortcuts by scan code on Windows (keyboard.dispatch = code), so a
+                        // stroke with wScan = 0 is "Unidentified" to it and Shift+Left / Ctrl+C do nothing (the typed /table check never saw a copy).
+                        wScan = (ushort)MapVirtualKey((uint)s.Vk, 0),
                         dwFlags = (s.Up ? KEYEVENTF_KEYUP : 0) | (Vk.IsExtended(s.Vk) ? KEYEVENTF_EXTENDEDKEY : 0),
                     },
                 },

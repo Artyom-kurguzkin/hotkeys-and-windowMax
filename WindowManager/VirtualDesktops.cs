@@ -56,6 +56,12 @@ static class VirtualDesktops
     static readonly Guid ImmersiveShell = new("C2F03A33-21F5-47FA-B4BB-156362A2F239");
     static readonly Guid ManagerInternalService = new("C5E0CDCA-7B6E-41B2-9FC4-D93975CC467B");
 
+    // Task View (Win+Tab) open: SwitchDesktop moved the desktop behind it but not Task View's own selection, so Enter landed back on the
+    // desktop it had selected (#wi16). There the keystroke is used: Task View handles Ctrl+Win+Left/Right itself.
+    // Windows 11: XamlExplorerHostIslandWindow (with a _WASDK suffix on newer builds); Windows 10: MultitaskingViewFrame.
+    public static bool IsTaskView(string cls) =>
+        cls.StartsWith("XamlExplorerHostIslandWindow", StringComparison.Ordinal) || cls == "MultitaskingViewFrame";
+
     // True if the shell handled it (including "no desktop that way"). False = caller types the keystroke.
     // Fetched fresh each call: an Explorer restart would leave a cached proxy dead, and a switch is rare.
     public static bool Switch(bool right)

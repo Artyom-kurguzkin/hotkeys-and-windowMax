@@ -95,21 +95,6 @@ public class AltGestureTests
         }
     }
 
-    // Real window, created by this test process only.
-    [Fact]
-    public void Hotkey_window_toggles_open_and_closed()
-    {
-        static bool WaitFor(Func<bool> cond) { for (var i = 0; i < 100 && !cond(); i++) Thread.Sleep(50); return cond(); }
-        Assert.True(HelpWindow.Toggle(IntPtr.Zero));                  // opens
-        Assert.True(WaitFor(() => HelpWindow.IsShowing));
-        Assert.False(HelpWindow.Toggle(IntPtr.Zero));                 // second press closes it
-        Assert.True(WaitFor(() => !HelpWindow.IsOpen));
-        Assert.True(HelpWindow.Toggle(IntPtr.Zero));                  // and it can open again
-        Assert.True(WaitFor(() => HelpWindow.IsShowing));
-        HelpWindow.Toggle(IntPtr.Zero);
-        Assert.True(WaitFor(() => !HelpWindow.IsOpen));
-    }
-
     [Fact]
     public void Both_Alts_is_not_part_of_a_triple_tap()
     {

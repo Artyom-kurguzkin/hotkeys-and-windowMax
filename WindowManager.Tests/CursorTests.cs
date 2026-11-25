@@ -46,8 +46,8 @@ public class CursorTests
         Assert.Throws<FormatException>(() => CursorArt.Parse("M0 0 C1 1 2 2 3 3"));
 
     [Theory]
-    [InlineData(96u, 40, 16, 3)]
-    [InlineData(144u, 60, 24, 5)] // 150%: what the browser draws at devicePixelRatio 1.5
+    [InlineData(96u, 28, 11, 2)]
+    [InlineData(144u, 42, 17, 3)] // 150%: smaller than Windows' own 48px box, so tooltips clear it
     public void Size_and_hotspot_scale_with_DPI(uint dpi, int size, int handX, int handY)
     {
         Assert.Equal(size, CursorArt.PixelSize(dpi));
@@ -68,7 +68,7 @@ public class CursorTests
         {
             foreach (var l in s.Layers) { CursorArt.Parse(l.Outline); if (l.Details != "") CursorArt.Parse(l.Details); if (l.Marks != "") CursorArt.Parse(l.Marks); }
             using var b = CursorTheme.Render(s, 144);
-            Assert.Equal(60, b.Width);
+            Assert.Equal(42, b.Width);
         }
     }
 
@@ -84,8 +84,8 @@ public class CursorTests
     public void Ring_has_a_hole() // two concentric figures, filled even-odd
     {
         using var b = CursorTheme.Render(CursorArt.Wait, 96);
-        Assert.Equal(0, b.GetPixel(20, 20).A);                   // centre: transparent
-        Assert.Equal(255, b.GetPixel(20, 31).A);                 // on the band: drawn
+        Assert.Equal(0, b.GetPixel(14, 14).A);                   // centre: transparent
+        Assert.Equal(255, b.GetPixel(14, 22).A);                 // on the band: drawn
     }
 
     [Fact]
@@ -94,9 +94,9 @@ public class CursorTests
         using var b = CursorTheme.Render(CursorArt.Arrow, 96);
         var cur = CursorFile.Cur(b, 4, 3);
         Assert.Equal(2, BitConverter.ToUInt16(cur, 2));          // type: cursor
-        Assert.Equal(40, cur[6]);                                 // width
+        Assert.Equal(28, cur[6]);                                 // width
         Assert.Equal((4, 3), (BitConverter.ToUInt16(cur, 10), BitConverter.ToUInt16(cur, 12)));
-        Assert.Equal(80, BitConverter.ToInt32(cur, 22 + 8));     // DIB height = image + mask
+        Assert.Equal(56, BitConverter.ToInt32(cur, 22 + 8));     // DIB height = image + mask
         Assert.Equal(cur.Length - 22, BitConverter.ToInt32(cur, 14)); // declared image size matches
     }
 
@@ -115,21 +115,21 @@ public class CursorTests
     }
 
     [Fact]
-    public void Our_arrow_is_recognised() => Assert.True(CursorArt.IsOurs(6, 5, 60, 144));
+    public void Our_arrow_is_recognised() => Assert.True(CursorArt.IsOurs(4, 3, 42, 144));
 
     [Theory]
     [InlineData(0, 0, 48)]  // Windows' own arrow at 150%: hotspot at the tip
-    [InlineData(0, 0, 60)]  // a scheme cursor that happens to be the same size
-    [InlineData(6, 5, 40)]  // ours, but rendered for another DPI
+    [InlineData(0, 0, 42)]  // a scheme cursor that happens to be the same size
+    [InlineData(3, 2, 28)]  // ours, but rendered for another DPI
     public void Reset_arrow_is_detected(int hotX, int hotY, int width) => Assert.False(CursorArt.IsOurs(hotX, hotY, width, 144));
 
     [Fact]
     public void Rendered_arrow_is_yellow_inside_and_transparent_outside()
     {
         using var bmp = CursorTheme.Render(CursorArt.Arrow, 96);
-        Assert.Equal(40, bmp.Width);
-        var inside = bmp.GetPixel(10, 20); // well inside the arrow body
+        Assert.Equal(28, bmp.Width);   // drawn at 28px (CursorArt.DrawPx): viewBox points below are x 0.7
+        var inside = bmp.GetPixel(7, 14); // well inside the arrow body
         Assert.Equal((0xFF, 0xC9, 0x4D, 255), (inside.R, inside.G, inside.B, inside.A));
-        Assert.Equal(0, bmp.GetPixel(37, 3).A); // top-right corner: nothing drawn
+        Assert.Equal(0, bmp.GetPixel(26, 2).A); // top-right corner: nothing drawn
     }
 }
